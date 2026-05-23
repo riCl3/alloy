@@ -6,6 +6,7 @@ import { ensureApiKeys } from './secretManager';
 
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
+let apiKeysReady: Promise<{ groq: string; gemini: string }>;
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Alloy');
@@ -13,12 +14,14 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(diagnosticCollection);
 
-  ensureApiKeys(context).then((keys) => {
+  apiKeysReady = ensureApiKeys(context).then((keys) => {
     const groq = keys.groq ? 'set' : 'missing';
     const gemini = keys.gemini ? 'set' : 'missing';
     outputChannel.appendLine(`[Alloy] API keys — Groq: ${groq}, Gemini: ${gemini}`);
+    return keys;
   }).catch((err) => {
     outputChannel.appendLine(`[Alloy] Failed to load API keys: ${err.message}`);
+    return { groq: '', gemini: '' };
   });
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -31,71 +34,104 @@ export function activate(context: vscode.ExtensionContext) {
     });
   }
 
-  context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument(async (document: vscode.TextDocument) => {
+  const disposable = vscode.commands.registerCommand(
+    'reviewbot.reviewCurrentFile',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showWarningMessage('No active editor to review.');
+        return;
+      }
+
+      const document = editor.document;
       if (document.uri.scheme !== 'file') {
+        vscode.window.showWarningMessage('Cannot review unsaved or non-file documents.');
         return;
       }
 
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
       if (!workspaceFolder) {
+        vscode.window.showWarningMessage('File is not in a workspace folder.');
         return;
       }
 
       const filePath = document.uri.fsPath;
       const repoPath = workspaceFolder.uri.fsPath;
 
-      try {
-        const rawDiff = await getDiffForFile(filePath, { repoPath });
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Alloy: Reviewing code...',
+          cancellable: false,
+        },
+        async () => {
+          try {
+            outputChannel.clear();
+            outputChannel.appendLine(`[Alloy] Starting review for: ${filePath}`);
+            outputChannel.appendLine(`[Alloy] Repo path: ${repoPath}`);
+            console.log(`[Alloy] Starting review for: ${filePath}`);
 
-        if (!rawDiff) {
-          diagnosticCollection.set(document.uri, []);
-          return;
-        }
+            const keys = await apiKeysReady;
+            if (!keys.groq && !keys.gemini) {
+              outputChannel.appendLine(`[Alloy] No API keys available. Aborting.`);
+              vscode.window.showErrorMessage('Alloy: No API keys configured. Please restart and enter your keys.');
+              return;
+            }
 
-        const parsedDiff = parseUnifiedDiff(rawDiff, filePath);
+            console.log(`[Alloy] Calling getDiffForFile...`);
+            const rawDiff = await getDiffForFile(filePath, { repoPath });
+            console.log(`[Alloy] getDiffForFile returned: ${rawDiff.length} chars`);
+            outputChannel.appendLine(`[Alloy] Diff length: ${rawDiff.length} chars`);
 
-        outputChannel.clear();
-        outputChannel.appendLine(`[Alloy] Reviewing: ${filePath}`);
-        outputChannel.appendLine('─'.repeat(60));
-        outputChannel.appendLine(rawDiff);
-        outputChannel.appendLine('─'.repeat(60));
-        outputChannel.appendLine(
-          `Summary: ${parsedDiff.addedLines.length} additions, ${parsedDiff.removedLines.length} deletions`,
-        );
+            if (!rawDiff) {
+              diagnosticCollection.set(document.uri, []);
+              outputChannel.appendLine(`[Alloy] No diff found for ${filePath}`);
+              vscode.window.showWarningMessage('Alloy: No diff found for this file. Make sure the file has uncommitted changes.');
+              return;
+            }
 
-        console.log(`[Alloy] Diff for ${filePath}:`);
-        console.log(rawDiff);
-        console.log(
-          `[Alloy] Summary: ${parsedDiff.addedLines.length} additions, ${parsedDiff.removedLines.length} deletions`,
-        );
+            const parsedDiff = parseUnifiedDiff(rawDiff, filePath);
+            outputChannel.appendLine('─'.repeat(60));
+            outputChannel.appendLine(rawDiff);
+            outputChannel.appendLine('─'.repeat(60));
+            outputChannel.appendLine(
+              `Summary: ${parsedDiff.addedLines.length} additions, ${parsedDiff.removedLines.length} deletions`,
+            );
 
-        const modifiedLines = parsedDiff.addedLines.map((l) => l.lineNumber);
-        const sourceCode = document.getText();
+            const modifiedLines = parsedDiff.addedLines.map((l) => l.lineNumber);
+            const sourceCode = document.getText();
 
-        await reviewDiff({
-          diff: rawDiff,
-          sourceCode,
-          filePath,
-          modifiedLines,
-          uri: document.uri,
-          diagnosticCollection,
-        });
+            console.log(`[Alloy] Calling reviewDiff with ${modifiedLines.length} modified lines...`);
+            outputChannel.appendLine(`[Alloy] Sending to AI for review (${modifiedLines.length} modified lines)...`);
 
-        console.log(`[Alloy] Review complete for ${filePath}`);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[Alloy] Failed to review ${filePath}: ${message}`);
-        outputChannel.appendLine(`[Alloy] Error: ${message}`);
-      }
-    }),
+            await reviewDiff({
+              diff: rawDiff,
+              sourceCode,
+              filePath,
+              modifiedLines,
+              uri: document.uri,
+              diagnosticCollection,
+            });
+
+            const count = diagnosticCollection.get(document.uri)?.length ?? 0;
+            outputChannel.appendLine(`[Alloy] Review complete: ${count} finding(s)`);
+            if (count > 0) {
+              vscode.window.showInformationMessage(`Alloy: ${count} issue(s) found. Check the Problems panel (Ctrl+Shift+M).`);
+            } else {
+              vscode.window.showInformationMessage('Alloy: No issues found. Check the Output panel for details.');
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`[Alloy] Failed to review ${filePath}: ${message}`);
+            outputChannel.appendLine(`[Alloy] Error: ${message}`);
+            vscode.window.showErrorMessage(`Alloy review failed: ${message}`);
+          }
+        },
+      );
+    },
   );
 
-  context.subscriptions.push(
-    vscode.workspace.onDidCloseTextDocument((document) => {
-      diagnosticCollection.set(document.uri, []);
-    }),
-  );
+  context.subscriptions.push(disposable);
 }
 
 export function deactivate() {

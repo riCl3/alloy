@@ -1,5 +1,5 @@
-import { buildDiagnostics } from './diagnosticBuilder';
-import { ReviewFinding } from './types';
+import { buildDiagnostics } from '../diagnosticBuilder';
+import { ReviewFinding } from '../types';
 
 describe('buildDiagnostics', () => {
   it('converts a single error finding with correct 0-based line number', () => {

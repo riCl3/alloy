@@ -2,11 +2,11 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/src'],
+  roots: ['<rootDir>/src/test'],
   testMatch: ['**/*.test.ts'],
   moduleFileExtensions: ['ts', 'js', 'json'],
   moduleNameMapper: {
-    '^vscode$': '<rootDir>/src/__mocks__/vscode.ts',
+    '^vscode$': '<rootDir>/src/test/__mocks__/vscode.ts',
   },
-  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.test.ts', '!src/extension.ts'],
+  collectCoverageFrom: ['src/**/*.ts', '!src/test/**', '!src/extension.ts'],
 };

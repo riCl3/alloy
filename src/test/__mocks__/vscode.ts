@@ -61,13 +61,15 @@ export const languages = {
 
 export const workspace = {
   getWorkspaceFolder: jest.fn(),
-  onDidSaveTextDocument: jest.fn(),
-  onDidCloseTextDocument: jest.fn(),
   textDocuments: [],
 };
 
 export enum ExtensionMode {
   Test = 1,
+}
+
+export enum ProgressLocation {
+  Notification = 15,
 }
 
 export const window = {
@@ -83,4 +85,10 @@ export const window = {
   showWarningMessage: jest.fn(),
   showInformationMessage: jest.fn(),
   showInputBox: jest.fn(),
+  activeTextEditor: undefined,
+  withProgress: jest.fn(),
+};
+
+export const commands = {
+  registerCommand: jest.fn(),
 };

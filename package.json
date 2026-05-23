@@ -13,8 +13,26 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onCommand:reviewbot.reviewCurrentFile"
   ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "reviewbot.reviewCurrentFile",
+        "title": "ReviewBot: Review Current File",
+        "icon": "$(sparkle)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "reviewbot.reviewCurrentFile",
+          "group": "navigation",
+          "when": "editorLangId =~ /typescript|javascript|python/"
+        }
+      ]
+    }
+  },
   "main": "./out/extension.js",
   "scripts": {
     "vscode:prepublish": "npm run compile",

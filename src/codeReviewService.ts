@@ -33,15 +33,19 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
     return;
   }
 
+  console.log(`[Alloy] Extracting function context...`);
   const functionContexts = await getFunctionContext(sourceCode, modifiedLines, filePath);
   const functionContextStr = formatFunctionContext(functionContexts);
+  console.log(`[Alloy] Function context: ${functionContexts.length} functions found`);
 
   let similarFunctions = '';
   if (indexer && indexer.vectorStore.size > 0) {
     try {
+      console.log(`[Alloy] Querying similar functions...`);
       similarFunctions = await indexer.querySimilar(sourceCode, modifiedLines, filePath, 3);
-    } catch {
-      // fail silently if similarity query fails
+      console.log(`[Alloy] Similar functions found: ${similarFunctions.length} chars`);
+    } catch (err) {
+      console.warn(`[Alloy] Similar function query failed: ${(err as Error).message}`);
     }
   }
 
@@ -61,4 +65,5 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
   const { finalFindings } = await runReviewGraph(initialState);
   const diagnostics = buildDiagnostics(finalFindings);
   diagnosticCollection.set(uri, diagnostics);
+  console.log(`[Alloy] Review complete: ${finalFindings.length} findings, ${diagnostics.length} diagnostics`);
 }

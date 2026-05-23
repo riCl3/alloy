@@ -1,8 +1,8 @@
-import { RepoStyleIndexer, getEmbedding, formatSimilarFunctions, SimilarFunctionEntry } from './repoStyleIndexer';
-import { IndexedFunction } from './vectorStore';
-import { getFunctionContext, detectLanguage } from './astContext';
+import { RepoStyleIndexer, getEmbedding, formatSimilarFunctions, SimilarFunctionEntry } from '../repoStyleIndexer';
+import { IndexedFunction } from '../vectorStore';
+import { getFunctionContext, detectLanguage } from '../astContext';
 
-jest.mock('./astContext', () => ({
+jest.mock('../astContext', () => ({
   detectLanguage: jest.fn(),
   getFunctionContext: jest.fn(),
   formatFunctionContext: jest.fn().mockReturnValue(''),

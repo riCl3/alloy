@@ -133,7 +133,8 @@ async function securityScanner(state: GraphState): Promise<Partial<GraphState>> 
     const prompt = buildPersonaPrompt('security', state.diff, state.functionContext);
     const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.security });
     return { securityFindings: parseFindings(response.text) };
-  } catch {
+  } catch (err) {
+    console.error(`[Alloy] Security scanner failed: ${(err as Error).message}`);
     return { securityFindings: [] };
   }
 }
@@ -143,7 +144,8 @@ async function logicReviewer(state: GraphState): Promise<Partial<GraphState>> {
     const prompt = buildPersonaPrompt('logic', state.diff, state.functionContext);
     const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.logic });
     return { logicFindings: parseFindings(response.text) };
-  } catch {
+  } catch (err) {
+    console.error(`[Alloy] Logic reviewer failed: ${(err as Error).message}`);
     return { logicFindings: [] };
   }
 }
@@ -153,7 +155,8 @@ async function styleChecker(state: GraphState): Promise<Partial<GraphState>> {
     const prompt = buildPersonaPrompt('style', state.diff, state.functionContext, state.similarFunctions);
     const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.style });
     return { styleFindings: parseFindings(response.text) };
-  } catch {
+  } catch (err) {
+    console.error(`[Alloy] Style checker failed: ${(err as Error).message}`);
     return { styleFindings: [] };
   }
 }

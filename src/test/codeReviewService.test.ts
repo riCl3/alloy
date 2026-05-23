@@ -1,15 +1,15 @@
-import { reviewDiff, ReviewDiffOptions } from './codeReviewService';
-import { runReviewGraph } from './reviewGraph';
+import { reviewDiff, ReviewDiffOptions } from '../codeReviewService';
+import { runReviewGraph } from '../reviewGraph';
 
-jest.mock('./reviewGraph', () => {
-  const actual = jest.requireActual('./reviewGraph');
+jest.mock('../reviewGraph', () => {
+  const actual = jest.requireActual('../reviewGraph');
   return {
     ...actual,
     runReviewGraph: jest.fn(),
   };
 });
 
-jest.mock('./astContext', () => ({
+jest.mock('../astContext', () => ({
   getFunctionContext: jest.fn().mockResolvedValue([]),
   formatFunctionContext: jest.fn().mockReturnValue(''),
 }));
@@ -94,7 +94,7 @@ describe('reviewDiff', () => {
   });
 
   it('includes function context in the initial state when AST context is found', async () => {
-    const mockAstContext = require('./astContext');
+    const mockAstContext = require('../astContext');
     (mockAstContext.getFunctionContext as jest.Mock).mockResolvedValue([
       { name: 'greet', signature: 'function greet(name: string): void', startLine: 1, endLine: 3 },
     ]);

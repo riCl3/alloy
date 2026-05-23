@@ -1,9 +1,9 @@
-import { ReviewFinding } from './types';
-import { runReviewGraph, parseFindings, deduplicateFindings } from './reviewGraph';
-import { callLLM } from './llmRouter';
+import { ReviewFinding } from '../types';
+import { runReviewGraph, parseFindings, deduplicateFindings } from '../reviewGraph';
+import { callLLM } from '../llmRouter';
 
-jest.mock('./llmRouter', () => ({
-  ...jest.requireActual('./llmRouter'),
+jest.mock('../llmRouter', () => ({
+  ...jest.requireActual('../llmRouter'),
   callLLM: jest.fn(),
 }));
 

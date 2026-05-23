@@ -5,11 +5,14 @@ export interface GitOptions {
 }
 
 export async function getDiffForFile(filePath: string, options?: GitOptions): Promise<string> {
-  const git = simpleGit(options?.repoPath);
+  const git = simpleGit(options?.repoPath).env('GIT_OPTIONAL_LOCKS', '0');
 
-  const diff = await git.diff(['HEAD', '--', filePath]);
-
-  return diff;
+  try {
+    return await git.diff(['HEAD', '--', filePath]);
+  } catch {
+    // Fallback: diff unstaged changes only (avoids index lock issues)
+    return await git.diff(['--', filePath]);
+  }
 }
 
 export async function getRepoRoot(filePath: string): Promise<string | null> {

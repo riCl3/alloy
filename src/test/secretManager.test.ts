@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ensureApiKeys, getGroqApiKey, getGeminiApiKey, resetCache } from './secretManager';
+import { ensureApiKeys, getGroqApiKey, getGeminiApiKey, resetCache } from '../secretManager';
 
 const mockShowInputBox = vscode.window.showInputBox as jest.Mock;
 

@@ -19,18 +19,22 @@ const languageLoaders = new Map<string, LanguageLoader>();
 
 async function ensureInit(): Promise<void> {
   if (!initialized) {
-    await Parser.init();
+    const wasmPath = path.resolve(__dirname, '..', 'node_modules', 'web-tree-sitter', 'web-tree-sitter.wasm');
+    const wasmBinary = fs.readFileSync(wasmPath);
+    await Parser.init({ wasmBinary });
     initialized = true;
   }
 }
 
 function getLanguageWasmPath(language: string): string {
+  // Resolve relative to the extension root (parent of out/), not the VS Code CWD
+  const extensionRoot = path.resolve(__dirname, '..');
   switch (language) {
     case 'typescript':
     case 'tsx':
-      return 'node_modules/tree-sitter-typescript/tree-sitter-typescript.wasm';
+      return path.join(extensionRoot, 'node_modules', 'tree-sitter-typescript', 'tree-sitter-typescript.wasm');
     case 'javascript':
-      return 'node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm';
+      return path.join(extensionRoot, 'node_modules', 'tree-sitter-javascript', 'tree-sitter-javascript.wasm');
     default:
       throw new Error(`Unsupported language: ${language}`);
   }
@@ -54,8 +58,8 @@ async function getLanguage(language: string): Promise<Language> {
   }
   if (!loader.lang) {
     await ensureInit();
-    const wasmBuffer = fs.readFileSync(path.resolve(loader.wasmPath));
-    loader.lang = await Language.load(wasmBuffer);
+    const wasmBuffer = fs.readFileSync(loader.wasmPath);
+    loader.lang = await Language.load(new Uint8Array(wasmBuffer));
   }
   return loader.lang;
 }

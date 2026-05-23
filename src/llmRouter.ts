@@ -20,12 +20,26 @@ export class RateLimitError extends Error {
 function isRetryableError(err: unknown): boolean {
   if (err instanceof RateLimitError) return true;
   if (err instanceof TypeError && err.message.includes('fetch')) return true;
+  if (err instanceof Error && /Groq API error: (4\d\d|5\d\d)/.test(err.message)) return true;
   return false;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 30000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function callGroq(options: RouterOptions): Promise<LLMResponse> {
   const apiKey = options.groqApiKey ?? getGroqApiKey();
-  const model = options.groqModel ?? 'llama-3.1-70b-versatile';
+  if (!apiKey) {
+    throw new Error('Groq API key is missing');
+  }
+  const model = options.groqModel ?? 'llama-3.3-70b-versatile';
 
   const messages: { role: string; content: string }[] = [];
   if (options.systemPrompt) {
@@ -33,7 +47,8 @@ async function callGroq(options: RouterOptions): Promise<LLMResponse> {
   }
   messages.push({ role: 'user', content: options.prompt });
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  console.log(`[Alloy] Calling Groq API (model: ${model})...`);
+  const response = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -67,6 +82,9 @@ async function callGroq(options: RouterOptions): Promise<LLMResponse> {
 
 async function callGemini(options: RouterOptions): Promise<LLMResponse> {
   const apiKey = options.geminiApiKey ?? getGeminiApiKey();
+  if (!apiKey) {
+    throw new Error('Gemini API key is missing');
+  }
   const model = options.geminiModel ?? 'gemini-1.5-flash';
 
   const contents: { parts: { text: string }[] }[] = [];
@@ -77,7 +95,8 @@ async function callGemini(options: RouterOptions): Promise<LLMResponse> {
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  const response = await fetch(url, {
+  console.log(`[Alloy] Calling Gemini API (model: ${model})...`);
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents }),
@@ -100,12 +119,18 @@ async function callGemini(options: RouterOptions): Promise<LLMResponse> {
 
 export async function callLLM(options: RouterOptions): Promise<LLMResponse> {
   try {
-    return await callGroq(options);
+    const result = await callGroq(options);
+    console.log(`[Alloy] LLM call succeeded via Groq (${result.model})`);
+    return result;
   } catch (groqErr) {
+    console.warn(`[Alloy] Groq failed: ${(groqErr as Error).message}`);
     if (isRetryableError(groqErr)) {
       try {
-        return await callGemini(options);
+        const result = await callGemini(options);
+        console.log(`[Alloy] LLM call succeeded via Gemini (${result.model})`);
+        return result;
       } catch (geminiErr) {
+        console.error(`[Alloy] Gemini also failed: ${(geminiErr as Error).message}`);
         throw new Error(
           `All LLM providers failed. Groq: ${(groqErr as Error).message}. Gemini: ${(geminiErr as Error).message}`,
         );

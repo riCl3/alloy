@@ -1,4 +1,4 @@
-import { getFunctionContext, formatFunctionContext, detectLanguage, FunctionContext } from './astContext';
+import { getFunctionContext, formatFunctionContext, detectLanguage, FunctionContext } from '../astContext';
 
 const SAMPLE_TS_CODE = `
 function greet(name: string): void {
