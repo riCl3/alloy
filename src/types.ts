@@ -15,6 +15,7 @@ export interface ReviewState {
   filePath: string;
   modifiedLines: number[];
   functionContext: string;
+  similarFunctions: string;
   securityFindings: ReviewFinding[];
   logicFindings: ReviewFinding[];
   styleFindings: ReviewFinding[];

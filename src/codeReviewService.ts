@@ -3,6 +3,18 @@ import { buildDiagnostics } from './diagnosticBuilder';
 import { getFunctionContext, formatFunctionContext } from './astContext';
 import { ReviewState } from './types';
 import { runReviewGraph } from './reviewGraph';
+import { RepoStyleIndexer } from './repoStyleIndexer';
+
+let indexer: RepoStyleIndexer | null = null;
+
+export function initIndexer(workspacePath: string): Promise<void> {
+  indexer = new RepoStyleIndexer();
+  return indexer.initialize(workspacePath);
+}
+
+export function getIndexer(): RepoStyleIndexer | null {
+  return indexer;
+}
 
 export interface ReviewDiffOptions {
   diff: string;
@@ -24,12 +36,22 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
   const functionContexts = await getFunctionContext(sourceCode, modifiedLines, filePath);
   const functionContextStr = formatFunctionContext(functionContexts);
 
+  let similarFunctions = '';
+  if (indexer && indexer.vectorStore.size > 0) {
+    try {
+      similarFunctions = await indexer.querySimilar(sourceCode, modifiedLines, filePath, 3);
+    } catch {
+      // fail silently if similarity query fails
+    }
+  }
+
   const initialState: ReviewState = {
     diff,
     sourceCode,
     filePath,
     modifiedLines,
     functionContext: functionContextStr,
+    similarFunctions,
     securityFindings: [],
     logicFindings: [],
     styleFindings: [],

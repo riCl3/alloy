@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { getDiffForFile } from './gitUtils';
 import { parseUnifiedDiff } from './diffParser';
-import { reviewDiff } from './codeReviewService';
+import { reviewDiff, initIndexer } from './codeReviewService';
 
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
@@ -11,6 +11,16 @@ export function activate(context: vscode.ExtensionContext) {
   diagnosticCollection = vscode.languages.createDiagnosticCollection('alloy');
 
   context.subscriptions.push(diagnosticCollection);
+
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    const rootPath = workspaceFolders[0].uri.fsPath;
+    initIndexer(rootPath).then(() => {
+      outputChannel.appendLine('[Alloy] Repo style indexer initialized');
+    }).catch((err) => {
+      outputChannel.appendLine(`[Alloy] Indexer init skipped: ${err.message}`);
+    });
+  }
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(async (document: vscode.TextDocument) => {

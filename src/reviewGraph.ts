@@ -10,6 +10,7 @@ const ReviewAnnotation = Annotation.Root({
   filePath: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
   modifiedLines: Annotation<number[]>({ value: overwrite<number[]>(), default: () => [] }),
   functionContext: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
+  similarFunctions: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
   securityFindings: Annotation<ReviewFinding[]>({ value: overwrite<ReviewFinding[]>(), default: () => [] }),
   logicFindings: Annotation<ReviewFinding[]>({ value: overwrite<ReviewFinding[]>(), default: () => [] }),
   styleFindings: Annotation<ReviewFinding[]>({ value: overwrite<ReviewFinding[]>(), default: () => [] }),
@@ -44,6 +45,8 @@ const SYSTEM_PROMPTS: Record<string, string> = {
     'missing error handling, magic numbers, unused variables, excessively long functions,',
     'overly broad try-catch, and misleading naming.',
     'Do NOT comment on formatting, indentation, whitespace, or trivial style preferences.',
+    'If similar code examples are provided below, align your suggestions with the',
+    'established patterns and conventions visible in those examples.',
     'Return a JSON object with key "findings" containing an array of issues.',
     'Each issue has: line (1-based), severity ("error"|"warning"|"info"), message, suggestion.',
     'Return {"findings": []} if no quality issues found.',
@@ -57,13 +60,16 @@ const PERSONA_FOCUS: Record<string, string> = {
   style: 'code quality',
 };
 
-function buildPersonaPrompt(persona: string, diff: string, functionContext: string): string {
+function buildPersonaPrompt(persona: string, diff: string, functionContext: string, similarFunctions?: string): string {
   const parts = [
     `Review the following git diff ${diff ? 'and function context' : ''} for ${PERSONA_FOCUS[persona]}.`,
     '',
   ];
   if (functionContext) {
     parts.push('Function context:', functionContext, '');
+  }
+  if (persona === 'style' && similarFunctions) {
+    parts.push('Similar codebase patterns:', similarFunctions, '');
   }
   parts.push('Diff:', diff);
   return parts.join('\n');
@@ -144,7 +150,7 @@ async function logicReviewer(state: GraphState): Promise<Partial<GraphState>> {
 
 async function styleChecker(state: GraphState): Promise<Partial<GraphState>> {
   try {
-    const prompt = buildPersonaPrompt('style', state.diff, state.functionContext);
+    const prompt = buildPersonaPrompt('style', state.diff, state.functionContext, state.similarFunctions);
     const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.style });
     return { styleFindings: parseFindings(response.text) };
   } catch {
@@ -186,6 +192,7 @@ export async function runReviewGraph(initialState: ReviewState): Promise<{ final
     filePath: initialState.filePath,
     modifiedLines: initialState.modifiedLines,
     functionContext: initialState.functionContext,
+    similarFunctions: initialState.similarFunctions,
     securityFindings: [],
     logicFindings: [],
     styleFindings: [],
