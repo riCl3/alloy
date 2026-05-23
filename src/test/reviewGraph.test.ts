@@ -1,4 +1,4 @@
-import { ReviewFinding } from '../types';
+import { ReviewFinding, ReviewState } from '../types';
 import { runReviewGraph, parseFindings, deduplicateFindings } from '../reviewGraph';
 import { callLLM } from '../llmRouter';
 
@@ -99,7 +99,25 @@ describe('runReviewGraph', () => {
     mockCallLLM.mockReset();
   });
 
-  it('aggregates findings from all three persona nodes', async () => {
+  function baseState(overrides?: Partial<ReviewState>): ReviewState {
+    return {
+      diff: '',
+      sourceCode: '',
+      filePath: 'test.ts',
+      modifiedLines: [1],
+      functionContext: '',
+      similarFunctions: '',
+      securityFindings: [],
+      logicFindings: [],
+      styleFindings: [],
+      performanceFindings: [],
+      testFindings: [],
+      finalFindings: [],
+      ...overrides,
+    };
+  }
+
+  it('aggregates findings from all five persona nodes', async () => {
     mockCallLLM
       .mockResolvedValueOnce({
         text: JSON.stringify({ findings: [{ line: 1, severity: 'error', message: 'SQL injection', suggestion: 'Use params' }] }),
@@ -115,23 +133,25 @@ describe('runReviewGraph', () => {
         text: JSON.stringify({ findings: [{ line: 3, severity: 'info', message: 'Deep nesting', suggestion: 'Extract fn' }] }),
         provider: 'groq',
         model: 'llama3',
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ findings: [{ line: 4, severity: 'warning', message: 'N+1 query', suggestion: 'Batch fetch' }] }),
+        provider: 'groq',
+        model: 'llama3',
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ findings: [{ line: 5, severity: 'info', message: 'Missing edge case test', suggestion: 'Add test' }] }),
+        provider: 'groq',
+        model: 'llama3',
       });
 
-    const result = await runReviewGraph({
-      diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,5 @@\n+line1\n+line2\n+line3',
-      sourceCode: 'line1\nline2\nline3\nline4\nline5',
-      filePath: 'test.ts',
-      modifiedLines: [1, 2, 3],
-      functionContext: '',
-      similarFunctions: '',
-      securityFindings: [],
-      logicFindings: [],
-      styleFindings: [],
-      finalFindings: [],
-    });
+    const result = await runReviewGraph(baseState({
+      diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,7 @@\n+line1\n+line2\n+line3\n+line4\n+line5\n+line6\n+line7',
+      sourceCode: 'line1\nline2\nline3\nline4\nline5\nline6\nline7',
+    }));
 
-    expect(result.finalFindings).toHaveLength(3);
-    expect(mockCallLLM).toHaveBeenCalledTimes(3);
+    expect(result.finalFindings).toHaveLength(5);
+    expect(mockCallLLM).toHaveBeenCalledTimes(5);
   });
 
   it('deduplicates findings on same line across personas', async () => {
@@ -150,20 +170,22 @@ describe('runReviewGraph', () => {
         text: JSON.stringify({ findings: [] }),
         provider: 'groq',
         model: 'llama3',
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ findings: [] }),
+        provider: 'groq',
+        model: 'llama3',
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ findings: [] }),
+        provider: 'groq',
+        model: 'llama3',
       });
 
-    const result = await runReviewGraph({
+    const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
       sourceCode: 'line1\nline2\nline3',
-      filePath: 'test.ts',
-      modifiedLines: [1],
-      functionContext: '',
-      similarFunctions: '',
-      securityFindings: [],
-      logicFindings: [],
-      styleFindings: [],
-      finalFindings: [],
-    });
+    }));
 
     expect(result.finalFindings).toHaveLength(1);
     expect(result.finalFindings[0].severity).toBe('error');
@@ -173,20 +195,14 @@ describe('runReviewGraph', () => {
     mockCallLLM
       .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
       .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
       .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' });
 
-    const result = await runReviewGraph({
+    const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
       sourceCode: 'line1',
-      filePath: 'test.ts',
-      modifiedLines: [1],
-      functionContext: '',
-      similarFunctions: '',
-      securityFindings: [],
-      logicFindings: [],
-      styleFindings: [],
-      finalFindings: [],
-    });
+    }));
 
     expect(result.finalFindings).toEqual([]);
   });
@@ -195,20 +211,14 @@ describe('runReviewGraph', () => {
     mockCallLLM
       .mockRejectedValueOnce(new Error('API error'))
       .mockResolvedValueOnce({ text: JSON.stringify({ findings: [{ line: 1, severity: 'error', message: 'Bug', suggestion: 'Fix' }] }), provider: 'groq', model: 'llama3' })
-      .mockRejectedValueOnce(new Error('Network error'));
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' });
 
-    const result = await runReviewGraph({
+    const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
       sourceCode: 'line1',
-      filePath: 'test.ts',
-      modifiedLines: [1],
-      functionContext: '',
-      similarFunctions: '',
-      securityFindings: [],
-      logicFindings: [],
-      styleFindings: [],
-      finalFindings: [],
-    });
+    }));
 
     expect(result.finalFindings).toHaveLength(1);
     expect(result.finalFindings[0].message).toBe('Bug');

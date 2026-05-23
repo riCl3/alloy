@@ -17,11 +17,27 @@ jest.mock('../secretManager', () => ({
 
 jest.mock('../gitUtils', () => ({
   getDiffForFile: mockGetDiffForFile,
+  getHeadContent: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../diffParser', () => ({
   parseUnifiedDiff: mockParseUnifiedDiff,
 }));
+
+jest.mock('../findingsStore', () => ({
+  storeFindings: jest.fn(),
+  getFindings: jest.fn().mockReturnValue([]),
+  clearFindings: jest.fn(),
+}));
+
+jest.mock('../codeActionProvider', () => {
+  const providedCodeActionKinds = [{ value: 'quickfix' }];
+  return {
+    AlloyCodeActionProvider: class {
+      static providedCodeActionKinds = providedCodeActionKinds;
+    },
+  };
+});
 
 const mockContext: vscode.ExtensionContext = {
   secrets: {
@@ -98,7 +114,9 @@ describe('extension activate', () => {
     const { activate } = await import('../extension');
     activate(mockContext);
 
-    const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls[0][1];
+    const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls.find(
+      (c) => c[0] === 'reviewbot.reviewCurrentFile',
+    )![1];
     await handler();
 
     expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
@@ -124,7 +142,9 @@ describe('extension activate', () => {
     const { activate } = await import('../extension');
     activate(mockContext);
 
-    const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls[0][1];
+    const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls.find(
+      (c) => c[0] === 'reviewbot.reviewCurrentFile',
+    )![1];
     await handler();
 
     expect(mockGetDiffForFile).toHaveBeenCalledWith('/repo/src/test.ts', {
@@ -154,7 +174,9 @@ describe('extension activate', () => {
     const { activate } = await import('../extension');
     activate(mockContext);
 
-    const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls[0][1];
+    const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls.find(
+      (c) => c[0] === 'reviewbot.reviewCurrentFile',
+    )![1];
     await handler();
 
     expect(mockReviewDiff).not.toHaveBeenCalled();
@@ -177,7 +199,9 @@ describe('extension activate', () => {
     const { activate } = await import('../extension');
     activate(mockContext);
 
-    const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls[0][1];
+    const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls.find(
+      (c) => c[0] === 'reviewbot.reviewCurrentFile',
+    )![1];
     await handler();
 
     expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(

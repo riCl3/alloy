@@ -1,6 +1,6 @@
 export type Severity = 'error' | 'warning' | 'info';
 
-export type AgentType = 'security' | 'logic' | 'style';
+export type AgentType = 'security' | 'logic' | 'style' | 'performance' | 'test';
 
 export interface ReviewFinding {
   line: number;
@@ -19,6 +19,8 @@ export interface ReviewState {
   securityFindings: ReviewFinding[];
   logicFindings: ReviewFinding[];
   styleFindings: ReviewFinding[];
+  performanceFindings: ReviewFinding[];
+  testFindings: ReviewFinding[];
   finalFindings: ReviewFinding[];
 }
 

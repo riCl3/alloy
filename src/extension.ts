@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
-import { getDiffForFile } from './gitUtils';
+import * as path from 'path';
+import { getDiffForFile, getHeadContent } from './gitUtils';
 import { parseUnifiedDiff } from './diffParser';
 import { reviewDiff, initIndexer } from './codeReviewService';
 import { ensureApiKeys } from './secretManager';
+import { AlloyCodeActionProvider } from './codeActionProvider';
+
+const HEAD_SCHEME = 'alloy-head';
 
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
@@ -13,6 +17,40 @@ export function activate(context: vscode.ExtensionContext) {
   diagnosticCollection = vscode.languages.createDiagnosticCollection('alloy');
 
   context.subscriptions.push(diagnosticCollection);
+
+  // Register virtual document provider for HEAD version (used in diff view)
+  const headProvider = new (class implements vscode.TextDocumentContentProvider {
+    private cache = new Map<string, string>();
+    setHead(filePath: string, content: string) {
+      this.cache.set(filePath, content);
+    }
+    clearCache() {
+      this.cache.clear();
+    }
+    provideTextDocumentContent(uri: vscode.Uri): string {
+      return this.cache.get(uri.path) ?? '';
+    }
+  })();
+  context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(HEAD_SCHEME, headProvider));
+
+  // Register code action provider for inline quick fixes
+  const codeActionProvider = vscode.languages.registerCodeActionsProvider(
+    { scheme: 'file' },
+    new AlloyCodeActionProvider(),
+    { providedCodeActionKinds: AlloyCodeActionProvider.providedCodeActionKinds },
+  );
+  context.subscriptions.push(codeActionProvider);
+
+  // Register show issue command (called from CodeAction)
+  const showIssueCmd = vscode.commands.registerCommand('alloy.showIssue', (message: string, suggestion: string) => {
+    const detail = suggestion ? `${message}\n\nSuggestion: ${suggestion}` : message;
+    vscode.window.showInformationMessage(`[Alloy] ${detail}`, 'Copy').then((action) => {
+      if (action === 'Copy') {
+        vscode.env.clipboard.writeText(detail);
+      }
+    });
+  });
+  context.subscriptions.push(showIssueCmd);
 
   apiKeysReady = ensureApiKeys(context).then((keys) => {
     const groq = keys.groq ? 'set' : 'missing';
@@ -27,7 +65,8 @@ export function activate(context: vscode.ExtensionContext) {
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (workspaceFolders && workspaceFolders.length > 0) {
     const rootPath = workspaceFolders[0].uri.fsPath;
-    initIndexer(rootPath).then(() => {
+    const cachePath = path.join(context.globalStorageUri.fsPath, 'index');
+    initIndexer(rootPath, cachePath).then(() => {
       outputChannel.appendLine('[Alloy] Repo style indexer initialized');
     }).catch((err) => {
       outputChannel.appendLine(`[Alloy] Indexer init skipped: ${err.message}`);
@@ -68,7 +107,6 @@ export function activate(context: vscode.ExtensionContext) {
           try {
             outputChannel.clear();
             outputChannel.appendLine(`[Alloy] Starting review for: ${filePath}`);
-            outputChannel.appendLine(`[Alloy] Repo path: ${repoPath}`);
             console.log(`[Alloy] Starting review for: ${filePath}`);
 
             const keys = await apiKeysReady;
@@ -86,23 +124,33 @@ export function activate(context: vscode.ExtensionContext) {
             if (!rawDiff) {
               diagnosticCollection.set(document.uri, []);
               outputChannel.appendLine(`[Alloy] No diff found for ${filePath}`);
-              vscode.window.showWarningMessage('Alloy: No diff found for this file. Make sure the file has uncommitted changes.');
+              vscode.window.showWarningMessage('Alloy: No diff found. Make sure the file has uncommitted changes.');
               return;
             }
 
             const parsedDiff = parseUnifiedDiff(rawDiff, filePath);
-            outputChannel.appendLine('─'.repeat(60));
-            outputChannel.appendLine(rawDiff);
-            outputChannel.appendLine('─'.repeat(60));
             outputChannel.appendLine(
               `Summary: ${parsedDiff.addedLines.length} additions, ${parsedDiff.removedLines.length} deletions`,
             );
+
+            // Show split-screen diff view (HEAD vs working copy)
+            try {
+              const headContent = await getHeadContent(filePath, { repoPath });
+              if (headContent !== null) {
+                headProvider.setHead(filePath, headContent);
+                const headUri = vscode.Uri.parse(`${HEAD_SCHEME}:${filePath}`);
+                const fileName = path.basename(filePath);
+                vscode.commands.executeCommand('vscode.diff', headUri, document.uri, `Alloy: ${fileName} (HEAD ↔ Working)`);
+              }
+            } catch (err) {
+              outputChannel.appendLine(`[Alloy] Could not show diff view: ${(err as Error).message}`);
+            }
 
             const modifiedLines = parsedDiff.addedLines.map((l) => l.lineNumber);
             const sourceCode = document.getText();
 
             console.log(`[Alloy] Calling reviewDiff with ${modifiedLines.length} modified lines...`);
-            outputChannel.appendLine(`[Alloy] Sending to AI for review (${modifiedLines.length} modified lines)...`);
+            outputChannel.appendLine(`[Alloy] Sending to AI for review...`);
 
             await reviewDiff({
               diff: rawDiff,
@@ -113,12 +161,13 @@ export function activate(context: vscode.ExtensionContext) {
               diagnosticCollection,
             });
 
-            const count = diagnosticCollection.get(document.uri)?.length ?? 0;
+            const diagnostics = diagnosticCollection.get(document.uri) ?? [];
+            const count = diagnostics.length;
             outputChannel.appendLine(`[Alloy] Review complete: ${count} finding(s)`);
             if (count > 0) {
-              vscode.window.showInformationMessage(`Alloy: ${count} issue(s) found. Check the Problems panel (Ctrl+Shift+M).`);
+              vscode.window.showInformationMessage(`Alloy: ${count} issue(s) found. Check Problems panel (Ctrl+Shift+M).`);
             } else {
-              vscode.window.showInformationMessage('Alloy: No issues found. Check the Output panel for details.');
+              vscode.window.showInformationMessage('Alloy: No issues found.');
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);

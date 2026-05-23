@@ -15,6 +15,7 @@ export function buildDiagnostics(findings: ReviewFinding[]): vscode.Diagnostic[]
 
     const diagnostic = new vscode.Diagnostic(range, f.message, severity);
     diagnostic.source = 'Alloy';
+    diagnostic.code = `alloy-${f.severity}`;
 
     return diagnostic;
   });

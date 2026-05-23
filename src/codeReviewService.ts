@@ -4,12 +4,13 @@ import { getFunctionContext, formatFunctionContext } from './astContext';
 import { ReviewState } from './types';
 import { runReviewGraph } from './reviewGraph';
 import { RepoStyleIndexer } from './repoStyleIndexer';
+import { storeFindings, clearFindings } from './findingsStore';
 
 let indexer: RepoStyleIndexer | null = null;
 
-export function initIndexer(workspacePath: string): Promise<void> {
+export function initIndexer(workspacePath: string, cachePath?: string): Promise<void> {
   indexer = new RepoStyleIndexer();
-  return indexer.initialize(workspacePath);
+  return indexer.initialize(workspacePath, cachePath);
 }
 
 export function getIndexer(): RepoStyleIndexer | null {
@@ -59,11 +60,14 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
     securityFindings: [],
     logicFindings: [],
     styleFindings: [],
+    performanceFindings: [],
+    testFindings: [],
     finalFindings: [],
   };
 
   const { finalFindings } = await runReviewGraph(initialState);
   const diagnostics = buildDiagnostics(finalFindings);
+  storeFindings(uri, finalFindings);
   diagnosticCollection.set(uri, diagnostics);
   console.log(`[Alloy] Review complete: ${finalFindings.length} findings, ${diagnostics.length} diagnostics`);
 }
