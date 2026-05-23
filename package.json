@@ -3,6 +3,7 @@
   "displayName": "Alloy - AI Code Reviewer",
   "description": "AI-powered code review agent for VS Code",
   "version": "0.1.0",
+  "icon": "resources/icon.png",
   "publisher": "alloy",
   "license": "MIT",
   "engines": {
@@ -20,7 +21,10 @@
       {
         "command": "reviewbot.reviewCurrentFile",
         "title": "ReviewBot: Review Current File",
-        "icon": "$(sparkle)"
+        "icon": {
+          "light": "resources/icon.png",
+          "dark": "resources/icon.png"
+        }
       }
     ],
     "menus": {
