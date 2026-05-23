@@ -34,7 +34,7 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
       explainAction.diagnostics = [diagnostic];
       explainAction.command = {
         title: 'Explain issue',
-        command: 'alloy.showMessage',
+        command: 'alloy.showIssue',
         arguments: [diagnostic.message, suggestion],
       };
 

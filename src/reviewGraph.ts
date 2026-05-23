@@ -24,7 +24,7 @@ type GraphState = typeof ReviewAnnotation.State;
 const FIELD_GUIDE = [
   'Return a JSON object with key "findings" containing an array of issues.',
   'Each issue has: line, severity, message, suggestion.',
-  '- "line": 1-based line number of the issue',
+  '- "line": 1-based line number in the NEW (modified) file (use the absolute line number from the diff hunk headers)',
   '- "severity": "error", "warning", or "info"',
   '- "message": One sentence describing the problem. MAX 100 characters. NEVER include code, file paths, or file content.',
   '- "suggestion": One sentence describing how to fix it. MAX 150 characters. NEVER include code.',
@@ -267,6 +267,39 @@ async function testAnalyst(state: GraphState): Promise<Partial<GraphState>> {
   }
 }
 
+function adjustFindingLineNumbers(findings: ReviewFinding[], diff: string): ReviewFinding[] {
+  const hunks: { newStart: number; newCount: number }[] = [];
+  const regex = /@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/g;
+  let match;
+  while ((match = regex.exec(diff)) !== null) {
+    hunks.push({
+      newStart: parseInt(match[1], 10),
+      newCount: match[2] ? parseInt(match[2], 10) : 1,
+    });
+  }
+  if (hunks.length === 0) return findings;
+
+  const firstHunkStart = hunks[0].newStart;
+
+  return findings.map((f) => {
+    const inAnyHunk = hunks.some(
+      (h) => f.line >= h.newStart && f.line < h.newStart + h.newCount,
+    );
+    if (inAnyHunk) return f;
+
+    if (f.line < firstHunkStart && f.line <= 50) {
+      const adjusted = firstHunkStart + f.line - 1;
+      const adjustedInHunk = hunks.some(
+        (h) => adjusted >= h.newStart && adjusted < h.newStart + h.newCount,
+      );
+      if (adjustedInHunk) {
+        return { ...f, line: adjusted };
+      }
+    }
+    return f;
+  });
+}
+
 async function aggregator(state: GraphState): Promise<Partial<GraphState>> {
   const all = [
     ...state.securityFindings,
@@ -275,7 +308,8 @@ async function aggregator(state: GraphState): Promise<Partial<GraphState>> {
     ...state.performanceFindings,
     ...state.testFindings,
   ];
-  return { finalFindings: deduplicateFindings(all) };
+  const adjusted = adjustFindingLineNumbers(all, state.diff);
+  return { finalFindings: deduplicateFindings(adjusted) };
 }
 
 export function createReviewGraph() {
