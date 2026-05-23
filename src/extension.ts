@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { getDiffForFile } from './gitUtils';
 import { parseUnifiedDiff } from './diffParser';
 import { reviewDiff, initIndexer } from './codeReviewService';
+import { ensureApiKeys } from './secretManager';
 
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
@@ -11,6 +12,14 @@ export function activate(context: vscode.ExtensionContext) {
   diagnosticCollection = vscode.languages.createDiagnosticCollection('alloy');
 
   context.subscriptions.push(diagnosticCollection);
+
+  ensureApiKeys(context).then((keys) => {
+    const groq = keys.groq ? 'set' : 'missing';
+    const gemini = keys.gemini ? 'set' : 'missing';
+    outputChannel.appendLine(`[Alloy] API keys — Groq: ${groq}, Gemini: ${gemini}`);
+  }).catch((err) => {
+    outputChannel.appendLine(`[Alloy] Failed to load API keys: ${err.message}`);
+  });
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (workspaceFolders && workspaceFolders.length > 0) {

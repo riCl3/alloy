@@ -66,6 +66,10 @@ export const workspace = {
   textDocuments: [],
 };
 
+export enum ExtensionMode {
+  Test = 1,
+}
+
 export const window = {
   createOutputChannel: jest.fn().mockReturnValue({
     appendLine: jest.fn(),
@@ -78,4 +82,5 @@ export const window = {
   showErrorMessage: jest.fn(),
   showWarningMessage: jest.fn(),
   showInformationMessage: jest.fn(),
+  showInputBox: jest.fn(),
 };

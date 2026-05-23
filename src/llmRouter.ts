@@ -1,4 +1,5 @@
 import { LLMResponse } from './types';
+import { getGroqApiKey, getGeminiApiKey } from './secretManager';
 
 export interface RouterOptions {
   prompt: string;
@@ -23,7 +24,7 @@ function isRetryableError(err: unknown): boolean {
 }
 
 async function callGroq(options: RouterOptions): Promise<LLMResponse> {
-  const apiKey = options.groqApiKey ?? process.env.GROQ_API_KEY ?? '';
+  const apiKey = options.groqApiKey ?? getGroqApiKey();
   const model = options.groqModel ?? 'llama-3.1-70b-versatile';
 
   const messages: { role: string; content: string }[] = [];
@@ -65,7 +66,7 @@ async function callGroq(options: RouterOptions): Promise<LLMResponse> {
 }
 
 async function callGemini(options: RouterOptions): Promise<LLMResponse> {
-  const apiKey = options.geminiApiKey ?? process.env.GEMINI_API_KEY ?? '';
+  const apiKey = options.geminiApiKey ?? getGeminiApiKey();
   const model = options.geminiModel ?? 'gemini-1.5-flash';
 
   const contents: { parts: { text: string }[] }[] = [];
