@@ -1,4 +1,4 @@
-import { parseUnifiedDiff, ParsedDiff } from '../diffParser';
+import { parseUnifiedDiff } from '../diffParser';
 
 describe('parseUnifiedDiff', () => {
   it('parses a simple diff with added and removed lines', () => {

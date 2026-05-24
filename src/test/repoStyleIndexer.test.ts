@@ -1,5 +1,4 @@
 import { RepoStyleIndexer, getEmbedding, formatSimilarFunctions, SimilarFunctionEntry } from '../repoStyleIndexer';
-import { IndexedFunction } from '../vectorStore';
 import { getFunctionContext, detectLanguage } from '../astContext';
 
 jest.mock('../astContext', () => ({

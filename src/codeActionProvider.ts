@@ -6,7 +6,7 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
 
   provideCodeActions(
     document: vscode.TextDocument,
-    range: vscode.Range | vscode.Selection,
+    _range: vscode.Range | vscode.Selection,
     context: vscode.CodeActionContext,
   ): vscode.CodeAction[] {
     const actions: vscode.CodeAction[] = [];
@@ -41,6 +41,7 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
       // "Insert fix as comment" action — always shown if we have any message text
       if (suggestion) {
         const { prefix, suffix } = getCommentSyntax(langId);
+        const sanitizedSuggestion = sanitizeForComment(suggestion, suffix);
         const commentAction = new vscode.CodeAction(
           `Alloy: Suggest fix on line ${zeroBasedLine + 1}`,
           vscode.CodeActionKind.QuickFix,
@@ -51,13 +52,14 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
         edit.insert(
           document.uri,
           new vscode.Position(zeroBasedLine, 0),
-          `${prefix}FIXME [Alloy]: ${suggestion}${suffix}\n`,
+          `${prefix}FIXME [Alloy]: ${sanitizedSuggestion}${suffix}\n`,
         );
         commentAction.edit = edit;
         actions.push(commentAction);
       }
 
       // "Ignore this finding" action — always shown
+      const { prefix: ignorePrefix, suffix: ignoreSuffix } = getCommentSyntax(langId);
       const ignoreAction = new vscode.CodeAction(
         `Alloy: Ignore issue on line ${zeroBasedLine + 1}`,
         vscode.CodeActionKind.QuickFix,
@@ -68,7 +70,7 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
       ignoreEdit.insert(
         document.uri,
         new vscode.Position(zeroBasedLine, 0),
-        `${indent}// alloy-disable-next-line\n`,
+        `${indent}${ignorePrefix}alloy-disable-next-line${ignoreSuffix}\n`,
       );
       ignoreAction.edit = ignoreEdit;
       actions.push(ignoreAction);
@@ -78,6 +80,16 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
 
     return actions;
   }
+}
+
+function sanitizeForComment(text: string, suffix: string): string {
+  let sanitized = text.replace(/[\r\n]+/g, ' ');
+  if (suffix === ' -->') {
+    sanitized = sanitized.replace(/-->/g, '--&gt;');
+  } else if (suffix === ' */') {
+    sanitized = sanitized.replace(/\*\//g, '* /');
+  }
+  return sanitized;
 }
 
 function getCommentSyntax(languageId: string): { prefix: string; suffix: string } {

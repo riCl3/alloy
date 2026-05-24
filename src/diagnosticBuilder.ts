@@ -10,7 +10,7 @@ const SEVERITY_MAP: Record<string, vscode.DiagnosticSeverity> = {
 export function buildDiagnostics(findings: ReviewFinding[]): vscode.Diagnostic[] {
   return findings.map((f) => {
     const line = Math.max(0, f.line - 1);
-    const range = new vscode.Range(line, 0, line, 9999);
+    const range = new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER);
     const severity = SEVERITY_MAP[f.severity] ?? vscode.DiagnosticSeverity.Warning;
 
     const diagnostic = new vscode.Diagnostic(range, f.message, severity);

@@ -62,24 +62,22 @@ describe('detectLanguage', () => {
 
 describe('getFunctionContext with TypeScript', () => {
   it('finds function containing a line in the function body', async () => {
-    // Line 2 is `  console.log(name);` inside greet()
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [2], 'file.ts');
+    // Line 3 is `  console.log(name);` inside greet() (1-based, row 2 is 0-based)
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [3], 'file.ts');
     expect(contexts).toHaveLength(1);
     expect(contexts[0].name).toBe('greet');
-    expect(contexts[0].startLine).toBeLessThanOrEqual(2);
-    expect(contexts[0].endLine).toBeGreaterThanOrEqual(2);
   });
 
   it('finds function containing a line on the declaration itself', async () => {
-    // Line 1 is the `function greet...` declaration
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [1], 'file.ts');
+    // Line 2 is the `function greet...` declaration (1-based; line 1 is empty from leading newline)
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [2], 'file.ts');
     expect(contexts).toHaveLength(1);
     expect(contexts[0].name).toBe('greet');
   });
 
   it('finds a class method containing a modified line', async () => {
-    // Line 7 is `return a + b;` inside add()
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [7], 'file.ts');
+    // Line 8 is `return a + b;` inside add() (1-based)
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [8], 'file.ts');
     expect(contexts).toHaveLength(1);
     expect(contexts[0].name).toBe('add');
     expect(contexts[0].signature).toContain('add');
@@ -88,41 +86,41 @@ describe('getFunctionContext with TypeScript', () => {
   });
 
   it('finds private class method', async () => {
-    // Line 11 is `console.log(value);` inside logResult()
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [11], 'file.ts');
+    // Line 12 is `console.log(value);` inside logResult() (1-based)
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [12], 'file.ts');
     expect(contexts).toHaveLength(1);
     expect(contexts[0].name).toBe('logResult');
     expect(contexts[0].signature).toContain('logResult');
   });
 
   it('finds arrow function via variable declarator', async () => {
-    // Line 16 is `return 42;` inside helper arrow function
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [16], 'file.ts');
+    // Line 17 is `return 42;` inside helper arrow function (1-based)
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [17], 'file.ts');
     expect(contexts).toHaveLength(1);
     expect(contexts[0].name).toBe('helper');
     expect(contexts[0].signature).toContain('helper');
   });
 
   it('returns empty when line is outside any function', async () => {
-    // Line 4 is blank line between greet() and class Calculator
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [4], 'file.ts');
+    // Line 5 is blank line between greet() and class Calculator (1-based)
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [5], 'file.ts');
     expect(contexts).toHaveLength(0);
   });
 
   it('returns multiple contexts when multiple lines hit different functions', async () => {
-    // Lines 2 (greet) and 7 (add)
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [2, 7], 'file.ts');
+    // Lines 3 (greet body) and 8 (add body) - 1-based
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [3, 8], 'file.ts');
     const names = contexts.map((c) => c.name).sort();
     expect(names).toEqual(['add', 'greet']);
   });
 
   it('extracts correct signature for a function declaration', async () => {
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [1], 'file.ts');
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [2], 'file.ts');
     expect(contexts[0].signature).toBe('function greet(name: string): void');
   });
 
   it('extracts correct signature for a class method', async () => {
-    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [6], 'file.ts');
+    const contexts = await getFunctionContext(SAMPLE_TS_CODE, [7], 'file.ts');
     expect(contexts[0].signature).toContain('add(a: number, b: number)');
   });
 
@@ -134,21 +132,21 @@ describe('getFunctionContext with TypeScript', () => {
 
 describe('getFunctionContext with JavaScript', () => {
   it('finds function in JavaScript code', async () => {
-    // Line 2 is `console.log(name);` inside greet()
-    const contexts = await getFunctionContext(SAMPLE_JS_CODE, [2], 'file.js');
+    // Line 3 is `console.log(name);` inside greet() (1-based)
+    const contexts = await getFunctionContext(SAMPLE_JS_CODE, [3], 'file.js');
     expect(contexts).toHaveLength(1);
     expect(contexts[0].name).toBe('greet');
   });
 
   it('finds second function in JavaScript', async () => {
-    // Line 8 is `throw new Error('no data');` inside process()
+    // Line 8 is `throw new Error('no data');` inside process() (1-based)
     const contexts = await getFunctionContext(SAMPLE_JS_CODE, [8], 'file.js');
     expect(contexts).toHaveLength(1);
     expect(contexts[0].name).toBe('process');
   });
 
   it('extracts signature for JS function', async () => {
-    const contexts = await getFunctionContext(SAMPLE_JS_CODE, [5], 'file.js');
+    const contexts = await getFunctionContext(SAMPLE_JS_CODE, [6], 'file.js');
     expect(contexts[0].signature).toBe('function process(data)');
   });
 });

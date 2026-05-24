@@ -16,6 +16,7 @@ export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Alloy');
   diagnosticCollection = vscode.languages.createDiagnosticCollection('alloy');
 
+  context.subscriptions.push(outputChannel);
   context.subscriptions.push(diagnosticCollection);
 
   // Register virtual document provider for HEAD version (used in diff view)
@@ -106,6 +107,7 @@ export function activate(context: vscode.ExtensionContext) {
         async () => {
           try {
             outputChannel.clear();
+            headProvider.clearCache();
             outputChannel.appendLine(`[Alloy] Starting review for: ${filePath}`);
             console.log(`[Alloy] Starting review for: ${filePath}`);
 

@@ -61,8 +61,8 @@ export class VectorStore {
 
   removeFile(filePath: string): void {
     this.fileMtimes.delete(filePath);
-    const toRemove = this.items.filter((i) => i.filePath === filePath).map((i) => i.id);
-    this.items = this.items.filter((i) => !toRemove.includes(i.id));
+    const toRemove = new Set(this.items.filter((i) => i.filePath === filePath).map((i) => i.id));
+    this.items = this.items.filter((i) => !toRemove.has(i.id));
   }
 
   query(embedding: number[], k: number): QueryResult[] {
@@ -83,11 +83,11 @@ export class VectorStore {
     for (const [path, mtime] of this.fileMtimes) {
       mtimes[path] = mtime;
     }
-    return { items: this.items, fileMtimes: mtimes };
+    return { items: [...this.items], fileMtimes: mtimes };
   }
 
   load(data: StoreSnapshot): void {
-    this.items = data.items;
+    this.items = [...data.items];
     this.fileMtimes.clear();
     for (const [path, mtime] of Object.entries(data.fileMtimes)) {
       this.fileMtimes.set(path, mtime);

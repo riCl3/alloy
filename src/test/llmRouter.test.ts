@@ -1,4 +1,4 @@
-import { callLLM, RateLimitError } from '../llmRouter';
+import { callLLM } from '../llmRouter';
 
 const mockFetch = jest.fn();
 global.fetch = mockFetch;

@@ -1,4 +1,4 @@
-import { VectorStore, IndexedFunction, cosineSimilarity, QueryResult } from '../vectorStore';
+import { VectorStore, IndexedFunction, cosineSimilarity } from '../vectorStore';
 
 function makeItem(id: string, embedding: number[]): IndexedFunction {
   return {

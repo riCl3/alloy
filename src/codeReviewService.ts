@@ -4,17 +4,13 @@ import { getFunctionContext, formatFunctionContext } from './astContext';
 import { ReviewState } from './types';
 import { runReviewGraph } from './reviewGraph';
 import { RepoStyleIndexer } from './repoStyleIndexer';
-import { storeFindings, clearFindings } from './findingsStore';
+import { storeFindings } from './findingsStore';
 
 let indexer: RepoStyleIndexer | null = null;
 
 export function initIndexer(workspacePath: string, cachePath?: string): Promise<void> {
   indexer = new RepoStyleIndexer();
   return indexer.initialize(workspacePath, cachePath);
-}
-
-export function getIndexer(): RepoStyleIndexer | null {
-  return indexer;
 }
 
 export interface ReviewDiffOptions {
@@ -52,7 +48,6 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
 
   const initialState: ReviewState = {
     diff,
-    sourceCode,
     filePath,
     modifiedLines,
     functionContext: functionContextStr,

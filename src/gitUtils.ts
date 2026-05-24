@@ -25,13 +25,3 @@ export async function getHeadContent(filePath: string, options?: GitOptions): Pr
     return null; // file is new, doesn't exist in HEAD
   }
 }
-
-export async function getRepoRoot(filePath: string): Promise<string | null> {
-  try {
-    const git = simpleGit();
-    const root = await git.revparse(['--show-toplevel']);
-    return root.trim();
-  } catch {
-    return null;
-  }
-}

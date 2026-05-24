@@ -1,7 +1,5 @@
 export type Severity = 'error' | 'warning' | 'info';
 
-export type AgentType = 'security' | 'logic' | 'style' | 'performance' | 'test';
-
 export interface ReviewFinding {
   line: number;
   severity: Severity;
@@ -11,7 +9,6 @@ export interface ReviewFinding {
 
 export interface ReviewState {
   diff: string;
-  sourceCode: string;
   filePath: string;
   modifiedLines: number[];
   functionContext: string;

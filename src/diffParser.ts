@@ -52,6 +52,8 @@ export function parseUnifiedDiff(rawDiff: string, filePath: string): ParsedDiff 
   let isNewFile = false;
   let isDeletedFile = false;
   let currentHunk: Hunk | null = null;
+  let oldLine = 0;
+  let newLine = 0;
 
   for (const line of lines) {
     const header = parseHeaderLine(line);
@@ -80,17 +82,12 @@ export function parseUnifiedDiff(rawDiff: string, filePath: string): ParsedDiff 
         newCount,
         lines: [],
       };
+      oldLine = oldStart;
+      newLine = newStart;
       continue;
     }
 
     if (!currentHunk) continue;
-
-    let oldLine = currentHunk.oldStart;
-    let newLine = currentHunk.newStart;
-    for (const l of currentHunk.lines) {
-      if (l.type !== 'added') oldLine++;
-      if (l.type !== 'removed') newLine++;
-    }
 
     if (line.startsWith('+')) {
       const hunkLine: HunkLine = {
@@ -101,6 +98,7 @@ export function parseUnifiedDiff(rawDiff: string, filePath: string): ParsedDiff 
       };
       currentHunk.lines.push(hunkLine);
       addedLines.push({ lineNumber: newLine, content: line.slice(1) });
+      newLine++;
     } else if (line.startsWith('-')) {
       const hunkLine: HunkLine = {
         type: 'removed',
@@ -110,6 +108,7 @@ export function parseUnifiedDiff(rawDiff: string, filePath: string): ParsedDiff 
       };
       currentHunk.lines.push(hunkLine);
       removedLines.push({ lineNumber: oldLine, content: line.slice(1) });
+      oldLine++;
     } else if (line.startsWith('\\')) {
       continue;
     } else {
@@ -120,6 +119,8 @@ export function parseUnifiedDiff(rawDiff: string, filePath: string): ParsedDiff 
         newLineNumber: newLine,
       };
       currentHunk.lines.push(hunkLine);
+      oldLine++;
+      newLine++;
     }
   }
 

@@ -103,7 +103,8 @@ async function callGemini(options: RouterOptions): Promise<LLMResponse> {
   });
 
   if (response.status === 429) {
-    throw new RateLimitError('Gemini API rate limited');
+    const retryAfter = parseInt(response.headers.get('Retry-After') ?? '30', 10);
+    throw new RateLimitError('Gemini API rate limited', retryAfter);
   }
 
   if (!response.ok) {

@@ -2,11 +2,10 @@ import { StateGraph, Annotation, START, END } from '@langchain/langgraph';
 import { callLLM } from './llmRouter';
 import { ReviewFinding, ReviewState } from './types';
 
-const overwrite = <T>() => (a: T, b: T) => b;
+const overwrite = <T>() => (_a: T, b: T) => b;
 
 const ReviewAnnotation = Annotation.Root({
   diff: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
-  sourceCode: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
   filePath: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
   modifiedLines: Annotation<number[]>({ value: overwrite<number[]>(), default: () => [] }),
   functionContext: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
@@ -84,7 +83,7 @@ const PERSONA_FOCUS: Record<string, string> = {
 
 function buildPersonaPrompt(persona: string, diff: string, functionContext: string, similarFunctions?: string): string {
   const parts = [
-    `Review the following git diff ${diff ? 'and function context' : ''} for ${PERSONA_FOCUS[persona]}.`,
+    `Review the following git diff ${functionContext ? 'and function context' : ''} for ${PERSONA_FOCUS[persona]}.`,
     '',
   ];
   if (functionContext) {
@@ -194,7 +193,7 @@ export function deduplicateFindings(all: ReviewFinding[]): ReviewFinding[] {
   const result: ReviewFinding[] = [];
   const severityOrder = { error: 3, warning: 2, info: 1 };
 
-  for (const [line, findings] of groups) {
+  for (const [, findings] of groups) {
     const merged = findings.reduce((best, current) => {
       if (severityOrder[current.severity] > severityOrder[best.severity]) {
         return current;
@@ -212,60 +211,33 @@ export function deduplicateFindings(all: ReviewFinding[]): ReviewFinding[] {
   return result;
 }
 
-async function securityScanner(state: GraphState): Promise<Partial<GraphState>> {
-  try {
-    const prompt = buildPersonaPrompt('security', state.diff, state.functionContext);
-    const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.security });
-    return { securityFindings: parseFindings(response.text) };
-  } catch (err) {
-    console.error(`[Alloy] Security scanner failed: ${(err as Error).message}`);
-    return { securityFindings: [] };
-  }
+const PERSONA_OUTPUT_FIELD: Record<string, string> = {
+  security: 'securityFindings',
+  logic: 'logicFindings',
+  style: 'styleFindings',
+  performance: 'performanceFindings',
+  test: 'testFindings',
+};
+
+function createPersonaReviewer(persona: string) {
+  return async (state: GraphState): Promise<Partial<GraphState>> => {
+    try {
+      const useSimilarFunctions = persona === 'style';
+      const prompt = buildPersonaPrompt(persona, state.diff, state.functionContext, useSimilarFunctions ? state.similarFunctions : undefined);
+      const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS[persona] });
+      return { [PERSONA_OUTPUT_FIELD[persona]]: parseFindings(response.text) };
+    } catch (err) {
+      console.error(`[Alloy] ${persona} reviewer failed: ${(err as Error).message}`);
+      return { [PERSONA_OUTPUT_FIELD[persona]]: [] };
+    }
+  };
 }
 
-async function logicReviewer(state: GraphState): Promise<Partial<GraphState>> {
-  try {
-    const prompt = buildPersonaPrompt('logic', state.diff, state.functionContext);
-    const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.logic });
-    return { logicFindings: parseFindings(response.text) };
-  } catch (err) {
-    console.error(`[Alloy] Logic reviewer failed: ${(err as Error).message}`);
-    return { logicFindings: [] };
-  }
-}
-
-async function styleChecker(state: GraphState): Promise<Partial<GraphState>> {
-  try {
-    const prompt = buildPersonaPrompt('style', state.diff, state.functionContext, state.similarFunctions);
-    const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.style });
-    return { styleFindings: parseFindings(response.text) };
-  } catch (err) {
-    console.error(`[Alloy] Style checker failed: ${(err as Error).message}`);
-    return { styleFindings: [] };
-  }
-}
-
-async function performanceReviewer(state: GraphState): Promise<Partial<GraphState>> {
-  try {
-    const prompt = buildPersonaPrompt('performance', state.diff, state.functionContext);
-    const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.performance });
-    return { performanceFindings: parseFindings(response.text) };
-  } catch (err) {
-    console.error(`[Alloy] Performance reviewer failed: ${(err as Error).message}`);
-    return { performanceFindings: [] };
-  }
-}
-
-async function testAnalyst(state: GraphState): Promise<Partial<GraphState>> {
-  try {
-    const prompt = buildPersonaPrompt('test', state.diff, state.functionContext);
-    const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.test });
-    return { testFindings: parseFindings(response.text) };
-  } catch (err) {
-    console.error(`[Alloy] Test analyst failed: ${(err as Error).message}`);
-    return { testFindings: [] };
-  }
-}
+const securityScanner = createPersonaReviewer('security');
+const logicReviewer = createPersonaReviewer('logic');
+const styleChecker = createPersonaReviewer('style');
+const performanceReviewer = createPersonaReviewer('performance');
+const testAnalyst = createPersonaReviewer('test');
 
 function adjustFindingLineNumbers(findings: ReviewFinding[], diff: string): ReviewFinding[] {
   const hunks: { newStart: number; newCount: number }[] = [];
@@ -312,6 +284,8 @@ async function aggregator(state: GraphState): Promise<Partial<GraphState>> {
   return { finalFindings: deduplicateFindings(adjusted) };
 }
 
+let cachedGraph: ReturnType<typeof createReviewGraph> | null = null;
+
 export function createReviewGraph() {
   const graph = new StateGraph(ReviewAnnotation)
     .addNode('securityScanner', securityScanner)
@@ -335,11 +309,17 @@ export function createReviewGraph() {
   return graph.compile();
 }
 
+function getCompiledGraph() {
+  if (!cachedGraph) {
+    cachedGraph = createReviewGraph();
+  }
+  return cachedGraph;
+}
+
 export async function runReviewGraph(initialState: ReviewState): Promise<{ finalFindings: ReviewFinding[] }> {
-  const app = createReviewGraph();
+  const app = getCompiledGraph();
   const result = await app.invoke({
     diff: initialState.diff,
-    sourceCode: initialState.sourceCode,
     filePath: initialState.filePath,
     modifiedLines: initialState.modifiedLines,
     functionContext: initialState.functionContext,

@@ -102,7 +102,6 @@ describe('runReviewGraph', () => {
   function baseState(overrides?: Partial<ReviewState>): ReviewState {
     return {
       diff: '',
-      sourceCode: '',
       filePath: 'test.ts',
       modifiedLines: [1],
       functionContext: '',
@@ -147,7 +146,6 @@ describe('runReviewGraph', () => {
 
     const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,7 @@\n+line1\n+line2\n+line3\n+line4\n+line5\n+line6\n+line7',
-      sourceCode: 'line1\nline2\nline3\nline4\nline5\nline6\nline7',
     }));
 
     expect(result.finalFindings).toHaveLength(5);
@@ -184,7 +182,6 @@ describe('runReviewGraph', () => {
 
     const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
-      sourceCode: 'line1\nline2\nline3',
     }));
 
     expect(result.finalFindings).toHaveLength(1);
@@ -201,7 +198,6 @@ describe('runReviewGraph', () => {
 
     const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
-      sourceCode: 'line1',
     }));
 
     expect(result.finalFindings).toEqual([]);
@@ -217,7 +213,6 @@ describe('runReviewGraph', () => {
 
     const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
-      sourceCode: 'line1',
     }));
 
     expect(result.finalFindings).toHaveLength(1);

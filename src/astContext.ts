@@ -16,6 +16,7 @@ interface LanguageLoader {
 
 let initialized = false;
 const languageLoaders = new Map<string, LanguageLoader>();
+let cachedParser: Parser | null = null;
 
 async function ensureInit(): Promise<void> {
   if (!initialized) {
@@ -121,7 +122,8 @@ function findFunctionsInTree(
 ): void {
   if (FUNCTION_NODE_TYPES.has(node.type)) {
     for (const line of modifiedLines) {
-      if (line >= node.startPosition.row && line <= node.endPosition.row) {
+      const line0 = line - 1; // modifiedLines are 1-based, tree-sitter rows are 0-based
+      if (line0 >= node.startPosition.row && line0 <= node.endPosition.row) {
         const name = getFunctionName(node, sourceCode);
         if (name) {
           contexts.push({
@@ -155,10 +157,12 @@ export async function getFunctionContext(
   }
 
   const lang = await getLanguage(language);
-  const parser = new Parser();
-  parser.setLanguage(lang);
+  if (!cachedParser) {
+    cachedParser = new Parser();
+  }
+  cachedParser.setLanguage(lang);
 
-  const tree = parser.parse(sourceCode);
+  const tree = cachedParser.parse(sourceCode);
   if (!tree) {
     return [];
   }
@@ -169,6 +173,7 @@ export async function getFunctionContext(
 
   findFunctionsInTree(root, modifiedSet, sourceCode, contexts);
 
+  tree.delete();
   return contexts;
 }
 

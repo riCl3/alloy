@@ -1,5 +1,5 @@
-import { VectorStore, IndexedFunction, type StoreSnapshot, cosineSimilarity } from './vectorStore';
-import { detectLanguage, getFunctionContext, formatFunctionContext } from './astContext';
+import { VectorStore, IndexedFunction, type StoreSnapshot } from './vectorStore';
+import { detectLanguage, getFunctionContext } from './astContext';
 import * as fs from 'fs';
 import * as path from 'path';
 
