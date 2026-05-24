@@ -40,11 +40,17 @@ describe('parseFindings', () => {
     expect(result).toEqual([]);
   });
 
-  it('extracts array from text containing JSON array', () => {
-    const text = 'Some prefix text\n[{"line":3,"severity":"info","message":"test","suggestion":"fix"}]\nsuffix';
+  it('extracts findings from text wrapped in markdown code block', () => {
+    const text = 'Here are the findings:\n```json\n{"findings":[{"line":3,"severity":"info","message":"test","suggestion":"fix"}]}\n```';
     const result = parseFindings(text);
     expect(result).toHaveLength(1);
     expect(result[0].line).toBe(3);
+  });
+
+  it('returns empty array for malformed text with no parseable JSON', () => {
+    const text = 'Some prefix text\n[{"line":3,"severity":"info","message":"test","suggestion":"fix"}]\nsuffix';
+    const result = parseFindings(text);
+    expect(result).toEqual([]);
   });
 });
 
@@ -102,10 +108,12 @@ describe('runReviewGraph', () => {
   function baseState(overrides?: Partial<ReviewState>): ReviewState {
     return {
       diff: '',
+      enumeratedDiff: '',
       filePath: 'test.ts',
       modifiedLines: [1],
       functionContext: '',
       similarFunctions: '',
+      singleAgent: false,
       securityFindings: [],
       logicFindings: [],
       styleFindings: [],
@@ -146,6 +154,7 @@ describe('runReviewGraph', () => {
 
     const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,7 @@\n+line1\n+line2\n+line3\n+line4\n+line5\n+line6\n+line7',
+      modifiedLines: [1, 2, 3, 4, 5],
     }));
 
     expect(result.finalFindings).toHaveLength(5);
@@ -182,6 +191,7 @@ describe('runReviewGraph', () => {
 
     const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
+      modifiedLines: [1],
     }));
 
     expect(result.finalFindings).toHaveLength(1);
@@ -198,9 +208,51 @@ describe('runReviewGraph', () => {
 
     const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
+      modifiedLines: [1],
     }));
 
     expect(result.finalFindings).toEqual([]);
+  });
+
+  it('filters out findings whose line numbers are not in modifiedLines', async () => {
+    mockCallLLM
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ findings: [{ line: 42, severity: 'error', message: 'Line 42 finds a bug', suggestion: 'Fix it' }] }),
+        provider: 'groq',
+        model: 'llama3',
+      })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' });
+
+    const result = await runReviewGraph(baseState({
+      diff: '--- a/test.ts\n+++ b/test.ts\n@@ -1,1 +1,1 @@\n+line1',
+      modifiedLines: [1],
+    }));
+
+    expect(result.finalFindings).toEqual([]);
+  });
+
+  it('keeps findings whose line numbers are in modifiedLines', async () => {
+    mockCallLLM
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ findings: [{ line: 1, severity: 'error', message: 'Bug on line 1', suggestion: 'Fix it' }] }),
+        provider: 'groq',
+        model: 'llama3',
+      })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }), provider: 'groq', model: 'llama3' });
+
+    const result = await runReviewGraph(baseState({
+      diff: '--- a/test.ts\n+++ b/test.ts\n@@ -1,1 +1,1 @@\n+line1',
+      modifiedLines: [1],
+    }));
+
+    expect(result.finalFindings).toHaveLength(1);
+    expect(result.finalFindings[0].line).toBe(1);
   });
 
   it('gracefully handles LLM failures in persona nodes', async () => {
@@ -213,9 +265,68 @@ describe('runReviewGraph', () => {
 
     const result = await runReviewGraph(baseState({
       diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
+      modifiedLines: [1],
     }));
 
     expect(result.finalFindings).toHaveLength(1);
     expect(result.finalFindings[0].message).toBe('Bug');
+  });
+
+  describe('single-agent mode', () => {
+    beforeEach(() => {
+      mockCallLLM.mockReset();
+    });
+
+    it('makes a single LLM call when singleAgent is true', async () => {
+      mockCallLLM.mockResolvedValueOnce({
+        text: JSON.stringify({
+          findings: [
+            { line: 1, severity: 'error', message: 'Security issue', suggestion: 'Fix it', category: 'security' },
+          ],
+        }),
+        provider: 'groq',
+        model: 'llama3',
+      });
+
+      const result = await runReviewGraph(baseState({
+        diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
+        modifiedLines: [1],
+        singleAgent: true,
+      }));
+
+      expect(result.finalFindings).toHaveLength(1);
+      expect(mockCallLLM).toHaveBeenCalledTimes(1);
+      expect(result.finalFindings[0].category).toBe('security');
+    });
+
+    it('returns empty findings when LLM returns empty array', async () => {
+      mockCallLLM.mockResolvedValueOnce({
+        text: JSON.stringify({ findings: [] }),
+        provider: 'groq',
+        model: 'llama3',
+      });
+
+      const result = await runReviewGraph(baseState({
+        diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
+        modifiedLines: [1],
+        singleAgent: true,
+      }));
+
+      expect(result.finalFindings).toEqual([]);
+      expect(mockCallLLM).toHaveBeenCalledTimes(1);
+    });
+
+    it('gracefully handles LLM failure in comprehensive reviewer', async () => {
+      mockCallLLM.mockRejectedValueOnce(new Error('API error'));
+
+      const result = await runReviewGraph(baseState({
+        diff: '--- a/test.ts\n+++ b/test.ts\n@@ -0,0 +1,1 @@\n+line1',
+        modifiedLines: [1],
+        singleAgent: true,
+      }));
+
+      expect(result.finalFindings).toEqual([]);
+      expect(mockCallLLM).toHaveBeenCalledTimes(1);
+    });
   });
 });

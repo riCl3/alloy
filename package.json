@@ -14,9 +14,19 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:reviewbot.reviewCurrentFile"
+    "onStartupFinished"
   ],
   "contributes": {
+    "configuration": {
+      "title": "Alloy",
+      "properties": {
+        "alloy.reviewOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically review code on save with a 2-second debounce"
+        }
+      }
+    },
     "commands": [
       {
         "command": "reviewbot.reviewCurrentFile",

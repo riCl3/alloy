@@ -19,6 +19,7 @@ const mockRunReviewGraph = runReviewGraph as jest.Mock;
 function makeOptions(overrides?: Partial<ReviewDiffOptions>): ReviewDiffOptions {
   return {
     diff: '--- a/file.ts\n+++ b/file.ts\n@@ -1 +1,2 @@\n-old\n+new\n+added',
+    enumeratedDiff: '[Line 1] new  <-- MODIFIED\n[Line 2] added  <-- MODIFIED',
     sourceCode: 'line1\nline2\nline3',
     filePath: '/repo/src/file.ts',
     modifiedLines: [2],

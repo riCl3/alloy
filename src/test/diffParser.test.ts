@@ -1,4 +1,4 @@
-import { parseUnifiedDiff } from '../diffParser';
+import { parseUnifiedDiff, buildEnumeratedDiff } from '../diffParser';
 
 describe('parseUnifiedDiff', () => {
   it('parses a simple diff with added and removed lines', () => {
@@ -191,7 +191,99 @@ describe('parseUnifiedDiff', () => {
     expect(result.addedLines).toHaveLength(2);
     expect(result.removedLines).toHaveLength(1);
   });
+});
 
+describe('buildEnumeratedDiff', () => {
+  it('produces enumerated lines with MODIFIED markers for added lines', () => {
+    const rawDiff = [
+      '--- a/src/file.ts',
+      '+++ b/src/file.ts',
+      '@@ -1,5 +1,6 @@',
+      ' line1',
+      ' line2',
+      '-old line',
+      '+new line',
+      ' line3',
+      '+another new line',
+    ].join('\n');
+
+    const parsed = parseUnifiedDiff(rawDiff, 'src/file.ts');
+    const result = buildEnumeratedDiff(parsed);
+
+    expect(result).toBe(
+      '[Line 1] line1\n[Line 2] line2\n[Line 3] new line  <-- MODIFIED\n[Line 4] line3\n[Line 5] another new line  <-- MODIFIED',
+    );
+  });
+
+  it('returns empty string for empty diff', () => {
+    const parsed = parseUnifiedDiff('', 'src/file.ts');
+    expect(buildEnumeratedDiff(parsed)).toBe('');
+  });
+
+  it('marks all lines as MODIFIED for a new file diff', () => {
+    const rawDiff = [
+      '--- /dev/null',
+      '+++ b/src/newfile.ts',
+      '@@ -0,0 +1,3 @@',
+      '+import { foo } from "./foo";',
+      '+',
+      '+export const bar = foo();',
+    ].join('\n');
+
+    const parsed = parseUnifiedDiff(rawDiff, 'src/newfile.ts');
+    const result = buildEnumeratedDiff(parsed);
+
+    expect(result).toBe(
+      '[Line 1] import { foo } from "./foo";  <-- MODIFIED\n[Line 2]   <-- MODIFIED\n[Line 3] export const bar = foo();  <-- MODIFIED',
+    );
+  });
+
+  it('handles multiple hunks with correct absolute line numbers', () => {
+    const rawDiff = [
+      '--- a/src/file.ts',
+      '+++ b/src/file.ts',
+      '@@ -1,3 +1,4 @@',
+      ' line1',
+      ' line2',
+      '+inserted',
+      ' line3',
+      '@@ -10,5 +11,6 @@',
+      ' line10',
+      '-remove me',
+      '+replaced',
+      ' line11',
+      ' line12',
+      '+extra',
+    ].join('\n');
+
+    const parsed = parseUnifiedDiff(rawDiff, 'src/file.ts');
+    const result = buildEnumeratedDiff(parsed);
+
+    expect(result).toBe(
+      '[Line 1] line1\n[Line 2] line2\n[Line 3] inserted  <-- MODIFIED\n[Line 4] line3\n[Line 11] line10\n[Line 12] replaced  <-- MODIFIED\n[Line 13] line11\n[Line 14] line12\n[Line 15] extra  <-- MODIFIED',
+    );
+  });
+
+  it('excludes removed lines from output', () => {
+    const rawDiff = [
+      '--- a/src/file.ts',
+      '+++ b/src/file.ts',
+      '@@ -1,3 +1,2 @@',
+      ' line1',
+      '-removed line',
+      ' line3',
+    ].join('\n');
+
+    const parsed = parseUnifiedDiff(rawDiff, 'src/file.ts');
+    const result = buildEnumeratedDiff(parsed);
+
+    // removed line should not appear; line3 keeps its new line number (2)
+    expect(result).toBe('[Line 1] line1\n[Line 2] line3');
+    expect(result).not.toContain('removed line');
+  });
+});
+
+describe('parseUnifiedDiff', () => {
   it('parses diff for a renamed file with similar content', () => {
     const rawDiff = [
       'diff --git a/src/old.ts b/src/new.ts',

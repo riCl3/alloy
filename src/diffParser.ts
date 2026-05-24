@@ -41,6 +41,24 @@ function parseHeaderLine(line: string): { side: 'old' | 'new'; path: string } | 
   return null;
 }
 
+export function buildEnumeratedDiff(parsedDiff: ParsedDiff): string {
+  if (parsedDiff.hunks.length === 0) return '';
+
+  const result: string[] = [];
+
+  for (const hunk of parsedDiff.hunks) {
+    for (const hunkLine of hunk.lines) {
+      if (hunkLine.type === 'added') {
+        result.push(`[Line ${hunkLine.newLineNumber}] ${hunkLine.content}  <-- MODIFIED`);
+      } else if (hunkLine.type === 'context') {
+        result.push(`[Line ${hunkLine.newLineNumber}] ${hunkLine.content}`);
+      }
+    }
+  }
+
+  return result.join('\n');
+}
+
 export function parseUnifiedDiff(rawDiff: string, filePath: string): ParsedDiff {
   const lines = rawDiff.split('\n');
   const hunks: Hunk[] = [];

@@ -8,6 +8,9 @@ export interface RouterOptions {
   geminiApiKey?: string;
   groqModel?: string;
   geminiModel?: string;
+  temperature?: number;
+  maxTokens?: number;
+  responseSchema?: Record<string, unknown>;
 }
 
 export class RateLimitError extends Error {
@@ -48,17 +51,23 @@ async function callGroq(options: RouterOptions): Promise<LLMResponse> {
   messages.push({ role: 'user', content: options.prompt });
 
   console.log(`[Alloy] Calling Groq API (model: ${model})...`);
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    temperature: options.temperature ?? 0.1,
+    max_tokens: options.maxTokens ?? 1024,
+  };
+  // Use json_object for broad model compatibility.
+  // Response format is guided by prompt instructions and parsed by parseFindings.
+  body.response_format = { type: 'json_object' };
+
   const response = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      response_format: { type: 'json_object' },
-    }),
+    body: JSON.stringify(body),
   });
 
   if (response.status === 429) {

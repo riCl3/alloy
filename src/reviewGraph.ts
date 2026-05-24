@@ -2,10 +2,37 @@ import { StateGraph, Annotation, START, END } from '@langchain/langgraph';
 import { callLLM } from './llmRouter';
 import { ReviewFinding, ReviewState } from './types';
 
+const REVIEW_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          line: { type: 'integer' },
+          severity: { type: 'string', enum: ['error', 'warning', 'info'] },
+          message: { type: 'string' },
+          suggestion: { type: 'string' },
+          category: {
+            type: 'string',
+            enum: ['security', 'logic', 'quality', 'performance', 'test'],
+          },
+        },
+        required: ['line', 'severity', 'message', 'suggestion'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['findings'],
+  additionalProperties: false,
+};
+
 const overwrite = <T>() => (_a: T, b: T) => b;
 
 const ReviewAnnotation = Annotation.Root({
   diff: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
+  enumeratedDiff: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
   filePath: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
   modifiedLines: Annotation<number[]>({ value: overwrite<number[]>(), default: () => [] }),
   functionContext: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
@@ -23,10 +50,10 @@ type GraphState = typeof ReviewAnnotation.State;
 const FIELD_GUIDE = [
   'Return a JSON object with key "findings" containing an array of issues.',
   'Each issue has: line, severity, message, suggestion.',
-  '- "line": 1-based line number in the NEW (modified) file (use the absolute line number from the diff hunk headers)',
+  '- "line": Line number from the "[Line N]" prefix shown in the changed code below (this is the absolute line number in the current file)',
   '- "severity": "error", "warning", or "info"',
   '- "message": One sentence describing the problem. MAX 100 characters. NEVER include code, file paths, or file content.',
-  '- "suggestion": One sentence describing how to fix it. MAX 150 characters. NEVER include code.',
+  '- "suggestion": What to do INSTEAD — describe the better approach, not just what to remove. MAX 150 characters. NEVER include code.',
   'Return {"findings": []} if no issues found.',
   'Respond ONLY with the JSON object, no other text.',
 ].join('\n');
@@ -71,6 +98,27 @@ const SYSTEM_PROMPTS: Record<string, string> = {
     'For each gap, describe the missing test scenario — not the code to implement it.',
     FIELD_GUIDE,
   ].join('\n'),
+  comprehensive: [
+    'You are a comprehensive code reviewer. Review the diff across ALL these categories:',
+    '',
+    '1. SECURITY: SQL injection, XSS, CSRF, auth/authorization issues, unsafe deserialization,',
+    '   path traversal, command injection, hardcoded secrets, insecure cryptography, input validation.',
+    '2. LOGIC: Race conditions, off-by-one errors, incorrect conditionals, null/undefined dereferences,',
+    '   incorrect state management, type mismatches, async/await issues, incorrect error handling,',
+    '   infinite loops, incorrect algorithm implementation.',
+    '3. CODE QUALITY: Deeply nested code, duplicated code blocks, overly complex expressions,',
+    '   missing error handling, magic numbers, unused variables, excessively long functions,',
+    '   overly broad try-catch, misleading naming.',
+    '4. PERFORMANCE: N+1 query problems, blocking I/O in async functions, unnecessary repeated computation,',
+    '   large data structures loaded fully into memory, inefficient string concatenation in loops,',
+    '   missing caching for expensive computations, O(n²) algorithms where n could be large.',
+    '   Only flag measurably slow issues at production scale.',
+    '5. TEST GAPS: Untested edge cases in the changed code, missing tests for new functions,',
+    '   incomplete boundary conditions, missing error-path tests, unrealistic mocks.',
+    '',
+    'For each finding, include a "category" field: "security", "logic", "quality", "performance", or "test".',
+    FIELD_GUIDE,
+  ].join('\n'),
 };
 
 const PERSONA_FOCUS: Record<string, string> = {
@@ -81,9 +129,9 @@ const PERSONA_FOCUS: Record<string, string> = {
   test: 'test coverage gaps',
 };
 
-function buildPersonaPrompt(persona: string, diff: string, functionContext: string, similarFunctions?: string): string {
+function buildPersonaPrompt(persona: string, enumeratedDiff: string, functionContext: string, similarFunctions?: string): string {
   const parts = [
-    `Review the following git diff ${functionContext ? 'and function context' : ''} for ${PERSONA_FOCUS[persona]}.`,
+    `Review the following code changes ${functionContext ? 'and function context' : ''} for ${PERSONA_FOCUS[persona]}.`,
     '',
   ];
   if (functionContext) {
@@ -92,7 +140,7 @@ function buildPersonaPrompt(persona: string, diff: string, functionContext: stri
   if (persona === 'style' && similarFunctions) {
     parts.push('Similar codebase patterns:', similarFunctions, '');
   }
-  parts.push('Diff:', diff);
+  parts.push('Changed code (lines prefixed with [Line N]; lines ending in <-- MODIFIED were changed):', enumeratedDiff);
   return parts.join('\n');
 }
 
@@ -149,7 +197,12 @@ function sanitizeFinding(raw: Record<string, unknown>): ReviewFinding | null {
 
   let suggestion = sanitizeMessage(typeof raw.suggestion === 'string' ? raw.suggestion : '', 150);
 
-  return { line, severity, message, suggestion };
+  const validCategories: ReviewFinding['category'][] = ['security', 'logic', 'quality', 'performance', 'test'];
+  const category = validCategories.includes(raw.category as ReviewFinding['category'])
+    ? (raw.category as ReviewFinding['category'])
+    : undefined;
+
+  return { line, severity, message, suggestion, category };
 }
 
 export function parseFindings(text: string): ReviewFinding[] {
@@ -157,14 +210,11 @@ export function parseFindings(text: string): ReviewFinding[] {
   try {
     parsed = JSON.parse(text);
   } catch {
-    const arrayMatch = text.match(/\[[\s\S]*\]/);
-    if (arrayMatch) {
-      try {
-        parsed = JSON.parse(arrayMatch[0]);
-      } catch {
-        return [];
-      }
-    } else {
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (!jsonMatch) return [];
+    try {
+      parsed = JSON.parse(jsonMatch[1]);
+    } catch {
       return [];
     }
   }
@@ -223,8 +273,9 @@ function createPersonaReviewer(persona: string) {
   return async (state: GraphState): Promise<Partial<GraphState>> => {
     try {
       const useSimilarFunctions = persona === 'style';
-      const prompt = buildPersonaPrompt(persona, state.diff, state.functionContext, useSimilarFunctions ? state.similarFunctions : undefined);
-      const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS[persona] });
+      const diffForPrompt = state.enumeratedDiff || state.diff;
+      const prompt = buildPersonaPrompt(persona, diffForPrompt, state.functionContext, useSimilarFunctions ? state.similarFunctions : undefined);
+      const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS[persona], responseSchema: REVIEW_SCHEMA });
       return { [PERSONA_OUTPUT_FIELD[persona]]: parseFindings(response.text) };
     } catch (err) {
       console.error(`[Alloy] ${persona} reviewer failed: ${(err as Error).message}`);
@@ -238,6 +289,34 @@ const logicReviewer = createPersonaReviewer('logic');
 const styleChecker = createPersonaReviewer('style');
 const performanceReviewer = createPersonaReviewer('performance');
 const testAnalyst = createPersonaReviewer('test');
+
+function buildComprehensivePrompt(diff: string, functionContext: string, similarFunctions?: string): string {
+  const parts = [
+    'Review the following code changes for all categories of issues (security, logic, code quality, performance, test coverage).',
+    '',
+  ];
+  if (functionContext) {
+    parts.push('Function context:', functionContext, '');
+  }
+  if (similarFunctions) {
+    parts.push('Similar codebase patterns:', similarFunctions, '');
+  }
+  parts.push('Changed code (lines prefixed with [Line N]; lines ending in <-- MODIFIED were changed):', diff);
+  return parts.join('\n');
+}
+
+async function comprehensiveReviewer(state: GraphState): Promise<Partial<GraphState>> {
+  try {
+    const diffForPrompt = state.enumeratedDiff || state.diff;
+    const prompt = buildComprehensivePrompt(diffForPrompt, state.functionContext, state.similarFunctions);
+    const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.comprehensive, responseSchema: REVIEW_SCHEMA });
+    const findings = parseFindings(response.text);
+    return { finalFindings: findings };
+  } catch (err) {
+    console.error(`[Alloy] comprehensive reviewer failed: ${(err as Error).message}`);
+    return { finalFindings: [] };
+  }
+}
 
 function adjustFindingLineNumbers(findings: ReviewFinding[], diff: string): ReviewFinding[] {
   const hunks: { newStart: number; newCount: number }[] = [];
@@ -281,12 +360,26 @@ async function aggregator(state: GraphState): Promise<Partial<GraphState>> {
     ...state.testFindings,
   ];
   const adjusted = adjustFindingLineNumbers(all, state.diff);
-  return { finalFindings: deduplicateFindings(adjusted) };
+  const deduplicated = deduplicateFindings(adjusted);
+  const modifiedSet = new Set(state.modifiedLines);
+  const filtered = deduplicated.filter((f) => modifiedSet.has(f.line));
+  console.log(`[Alloy] aggregator: ${deduplicated.length} deduplicated, ${deduplicated.length - filtered.length} filtered out (not in modifiedLines)`);
+  return { finalFindings: filtered };
 }
 
-let cachedGraph: ReturnType<typeof createReviewGraph> | null = null;
+let cachedFullGraph: ReturnType<typeof createReviewGraph> | null = null;
+let cachedSingleGraph: ReturnType<typeof createReviewGraph> | null = null;
 
-export function createReviewGraph() {
+export function createReviewGraph(singleAgent = false) {
+  if (singleAgent) {
+    const graph = new StateGraph(ReviewAnnotation)
+      .addNode('comprehensiveReviewer', comprehensiveReviewer)
+      .addEdge(START, 'comprehensiveReviewer')
+      .addEdge('comprehensiveReviewer', END);
+
+    return graph.compile();
+  }
+
   const graph = new StateGraph(ReviewAnnotation)
     .addNode('securityScanner', securityScanner)
     .addNode('logicReviewer', logicReviewer)
@@ -309,17 +402,24 @@ export function createReviewGraph() {
   return graph.compile();
 }
 
-function getCompiledGraph() {
-  if (!cachedGraph) {
-    cachedGraph = createReviewGraph();
+function getCompiledGraph(singleAgent: boolean) {
+  if (singleAgent) {
+    if (!cachedSingleGraph) {
+      cachedSingleGraph = createReviewGraph(true);
+    }
+    return cachedSingleGraph;
   }
-  return cachedGraph;
+  if (!cachedFullGraph) {
+    cachedFullGraph = createReviewGraph(false);
+  }
+  return cachedFullGraph;
 }
 
 export async function runReviewGraph(initialState: ReviewState): Promise<{ finalFindings: ReviewFinding[] }> {
-  const app = getCompiledGraph();
+  const app = getCompiledGraph(initialState.singleAgent);
   const result = await app.invoke({
     diff: initialState.diff,
+    enumeratedDiff: initialState.enumeratedDiff,
     filePath: initialState.filePath,
     modifiedLines: initialState.modifiedLines,
     functionContext: initialState.functionContext,

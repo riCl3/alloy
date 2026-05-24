@@ -5,6 +5,7 @@ const mockInitIndexer = jest.fn().mockResolvedValue(undefined);
 const mockEnsureApiKeys = jest.fn().mockResolvedValue({ groq: 'gk', gemini: 'gk2' });
 const mockGetDiffForFile = jest.fn();
 const mockParseUnifiedDiff = jest.fn();
+const mockBuildEnumeratedDiff = jest.fn().mockReturnValue('[Line 2] new line  <-- MODIFIED');
 
 jest.mock('../codeReviewService', () => ({
   reviewDiff: mockReviewDiff,
@@ -22,6 +23,7 @@ jest.mock('../gitUtils', () => ({
 
 jest.mock('../diffParser', () => ({
   parseUnifiedDiff: mockParseUnifiedDiff,
+  buildEnumeratedDiff: mockBuildEnumeratedDiff,
 }));
 
 jest.mock('../findingsStore', () => ({
@@ -152,11 +154,13 @@ describe('extension activate', () => {
     });
     expect(mockReviewDiff).toHaveBeenCalledWith({
       diff: 'mock-diff-content',
+      enumeratedDiff: '[Line 2] new line  <-- MODIFIED',
       sourceCode: 'line1\nline2\nline3',
       filePath: '/repo/src/test.ts',
       modifiedLines: [2],
       uri: doc.uri,
       diagnosticCollection: expect.any(Object),
+      commentController: expect.any(Object),
     });
     expect(mockParseUnifiedDiff).toHaveBeenCalledWith('mock-diff-content', '/repo/src/test.ts');
   });
@@ -207,5 +211,79 @@ describe('extension activate', () => {
     expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(
       'Alloy review failed: API error',
     );
+  });
+
+  describe('auto-review on save', () => {
+    let saveListener: (doc: any) => void;
+
+    beforeEach(async () => {
+      const doc = makeDocument('/repo/src/test.ts', 'line1');
+      vscode.window.activeTextEditor = makeEditor(doc);
+
+      const workspaceFolder = { uri: { fsPath: '/repo' }, name: 'repo', index: 0 };
+      (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue(workspaceFolder);
+
+      const { activate } = await import('../extension');
+      activate(mockContext);
+
+      saveListener = (vscode.workspace.onDidSaveTextDocument as jest.Mock).mock.calls[0][0];
+    });
+
+    it('does not trigger review immediately on save', () => {
+      const doc = makeDocument('/repo/src/test.ts', 'line1');
+      saveListener(doc);
+
+      expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
+    });
+
+    it('triggers review after 2-second debounce on save', () => {
+      jest.useFakeTimers();
+
+      const doc = makeDocument('/repo/src/test.ts', 'line1');
+      saveListener(doc);
+
+      jest.advanceTimersByTime(2000);
+
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+        'reviewbot.reviewCurrentFile',
+        { autoTrigger: true },
+      );
+
+      jest.useRealTimers();
+    });
+
+    it('resets debounce timer on rapid successive saves', () => {
+      jest.useFakeTimers();
+
+      const doc = makeDocument('/repo/src/test.ts', 'line1');
+      saveListener(doc);
+      jest.advanceTimersByTime(1000);
+      saveListener(doc); // save again, resets timer
+      jest.advanceTimersByTime(1000);
+      // Only 1 second since last save — shouldn't fire yet
+      expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1000);
+      // Now 2 seconds since last save
+      expect(vscode.commands.executeCommand).toHaveBeenCalledTimes(1);
+
+      jest.useRealTimers();
+    });
+
+    it('skips auto-review when reviewOnSave is disabled', () => {
+      jest.useFakeTimers();
+
+      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+        get: jest.fn().mockReturnValue(false),
+      });
+
+      const doc = makeDocument('/repo/src/test.ts', 'line1');
+      saveListener(doc);
+
+      jest.advanceTimersByTime(2000);
+
+      expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
+
+      jest.useRealTimers();
+    });
   });
 });

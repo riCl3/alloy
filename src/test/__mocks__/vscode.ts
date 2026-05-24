@@ -88,6 +88,10 @@ export const languages = {
 
 export const workspace = {
   getWorkspaceFolder: jest.fn(),
+  getConfiguration: jest.fn().mockReturnValue({
+    get: jest.fn().mockReturnValue(true),
+  }),
+  onDidSaveTextDocument: jest.fn().mockReturnValue({ dispose: jest.fn() }),
   textDocuments: [],
   registerTextDocumentContentProvider: jest.fn(),
 };
@@ -98,6 +102,12 @@ export enum ExtensionMode {
 
 export enum ProgressLocation {
   Notification = 15,
+  Window = 1,
+}
+
+export enum StatusBarAlignment {
+  Left = 1,
+  Right = 2,
 }
 
 export enum ViewColumn {
@@ -115,6 +125,13 @@ export const window = {
     hide: jest.fn(),
     dispose: jest.fn(),
   }),
+  createStatusBarItem: jest.fn().mockReturnValue({
+    text: '',
+    tooltip: '',
+    show: jest.fn(),
+    hide: jest.fn(),
+    dispose: jest.fn(),
+  }),
   showErrorMessage: jest.fn(),
   showWarningMessage: jest.fn(),
   showInformationMessage: jest.fn(),
@@ -125,6 +142,50 @@ export const window = {
     webview: { html: '' },
     dispose: jest.fn(),
   }),
+};
+
+export const CommentMode = {
+  Editing: 0,
+  Preview: 1,
+};
+
+export const CommentThreadCollapsibleState = {
+  Expanded: 0,
+  Collapsed: 1,
+};
+
+export class MarkdownString {
+  value: string;
+  isTrusted?: boolean;
+  constructor(value: string) {
+    this.value = value;
+  }
+}
+
+export interface Comment {
+  body: MarkdownString;
+  author: { name: string };
+}
+
+export const comments = {
+  createCommentController: jest.fn().mockReturnValue({
+    createCommentThread: jest.fn().mockReturnValue({
+      dispose: jest.fn(),
+      range: undefined,
+      uri: undefined,
+      comments: [],
+      collapsibleState: CommentThreadCollapsibleState.Collapsed,
+      canReply: false,
+    }),
+    commentingRangeProvider: undefined,
+    dispose: jest.fn(),
+  }),
+};
+
+export const env = {
+  clipboard: {
+    writeText: jest.fn(),
+  },
 };
 
 export const commands = {

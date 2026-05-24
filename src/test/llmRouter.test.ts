@@ -103,4 +103,59 @@ describe('callLLM', () => {
     expect(body.messages[0].role).toBe('system');
     expect(body.messages[0].content).toBe('You are a security reviewer');
   });
+
+  it('uses json_object response_format when responseSchema is provided', async () => {
+    mockFetch.mockImplementationOnce(() =>
+      mockOkResponse({
+        choices: [{ message: { content: '{"findings":[]}' } }],
+      }),
+    );
+
+    const schema = {
+      type: 'object',
+      properties: {
+        findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              line: { type: 'integer' },
+              severity: { type: 'string', enum: ['error', 'warning', 'info'] },
+            },
+            required: ['line', 'severity'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['findings'],
+      additionalProperties: false,
+    };
+
+    await callLLM({
+      prompt: 'review this',
+      groqApiKey: 'test-key',
+      responseSchema: schema,
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.response_format.type).toBe('json_object');
+    expect(body.response_format.json_schema).toBeUndefined();
+  });
+
+  it('includes temperature and max_tokens in request body', async () => {
+    mockFetch.mockImplementationOnce(() =>
+      mockOkResponse({
+        choices: [{ message: { content: '{"findings":[]}' } }],
+      }),
+    );
+
+    await callLLM({
+      prompt: 'review this',
+      groqApiKey: 'test-key',
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.temperature).toBe(0.1);
+    expect(body.max_tokens).toBe(1024);
+  });
 });

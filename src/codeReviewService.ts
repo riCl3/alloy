@@ -5,6 +5,8 @@ import { ReviewState } from './types';
 import { runReviewGraph } from './reviewGraph';
 import { RepoStyleIndexer } from './repoStyleIndexer';
 import { storeFindings } from './findingsStore';
+import { AlloyCommentController } from './commentController';
+
 
 let indexer: RepoStyleIndexer | null = null;
 
@@ -15,18 +17,21 @@ export function initIndexer(workspacePath: string, cachePath?: string): Promise<
 
 export interface ReviewDiffOptions {
   diff: string;
+  enumeratedDiff: string;
   sourceCode: string;
   filePath: string;
   modifiedLines: number[];
   uri: vscode.Uri;
   diagnosticCollection: vscode.DiagnosticCollection;
+  commentController?: AlloyCommentController;
 }
 
 export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
-  const { diff, sourceCode, filePath, modifiedLines, uri, diagnosticCollection } = options;
+  const { diff, enumeratedDiff, sourceCode, filePath, modifiedLines, uri, diagnosticCollection, commentController } = options;
 
   if (!diff.trim()) {
     diagnosticCollection.set(uri, []);
+    commentController?.clearComments(uri);
     return;
   }
 
@@ -48,10 +53,12 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
 
   const initialState: ReviewState = {
     diff,
+    enumeratedDiff,
     filePath,
     modifiedLines,
     functionContext: functionContextStr,
     similarFunctions,
+    singleAgent: true,
     securityFindings: [],
     logicFindings: [],
     styleFindings: [],
@@ -64,5 +71,6 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
   const diagnostics = buildDiagnostics(finalFindings);
   storeFindings(uri, finalFindings);
   diagnosticCollection.set(uri, diagnostics);
+  commentController?.setComments(uri, finalFindings);
   console.log(`[Alloy] Review complete: ${finalFindings.length} findings, ${diagnostics.length} diagnostics`);
 }
