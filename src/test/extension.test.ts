@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 const mockReviewDiff = jest.fn();
 const mockInitIndexer = jest.fn().mockResolvedValue(undefined);
-const mockEnsureApiKeys = jest.fn().mockResolvedValue({ groq: 'gk', gemini: 'gk2' });
+const mockEnsureProviderReady = jest.fn().mockResolvedValue({ apiKey: 'gk', baseUrl: '' });
 const mockGetDiffForFile = jest.fn();
 const mockParseUnifiedDiff = jest.fn();
 const mockBuildEnumeratedDiff = jest.fn().mockReturnValue('[Line 2] new line  <-- MODIFIED');
@@ -13,7 +13,12 @@ jest.mock('../codeReviewService', () => ({
 }));
 
 jest.mock('../secretManager', () => ({
-  ensureApiKeys: mockEnsureApiKeys,
+  ensureProviderReady: mockEnsureProviderReady,
+  setupProvider: jest.fn(),
+}));
+
+jest.mock('../llmRouter', () => ({
+  validateProvider: jest.fn(),
 }));
 
 jest.mock('../gitUtils', () => ({
@@ -102,10 +107,14 @@ describe('extension activate', () => {
     (vscode.window.showWarningMessage as jest.Mock).mockReset();
   });
 
-  it('registers the reviewbot.reviewCurrentFile command', async () => {
+  it('registers the alloy.reviewCurrentFile command and legacy alias', async () => {
     const { activate } = await import('../extension');
     activate(mockContext);
 
+    expect(vscode.commands.registerCommand).toHaveBeenCalledWith(
+      'alloy.reviewCurrentFile',
+      expect.any(Function),
+    );
     expect(vscode.commands.registerCommand).toHaveBeenCalledWith(
       'reviewbot.reviewCurrentFile',
       expect.any(Function),
@@ -117,7 +126,7 @@ describe('extension activate', () => {
     activate(mockContext);
 
     const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls.find(
-      (c) => c[0] === 'reviewbot.reviewCurrentFile',
+      (c) => c[0] === 'alloy.reviewCurrentFile',
     )![1];
     await handler();
 
@@ -145,7 +154,7 @@ describe('extension activate', () => {
     activate(mockContext);
 
     const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls.find(
-      (c) => c[0] === 'reviewbot.reviewCurrentFile',
+      (c) => c[0] === 'alloy.reviewCurrentFile',
     )![1];
     await handler();
 
@@ -161,6 +170,7 @@ describe('extension activate', () => {
       uri: doc.uri,
       diagnosticCollection: expect.any(Object),
       commentController: expect.any(Object),
+      config: expect.any(Object),
     });
     expect(mockParseUnifiedDiff).toHaveBeenCalledWith('mock-diff-content', '/repo/src/test.ts');
   });
@@ -179,7 +189,7 @@ describe('extension activate', () => {
     activate(mockContext);
 
     const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls.find(
-      (c) => c[0] === 'reviewbot.reviewCurrentFile',
+      (c) => c[0] === 'alloy.reviewCurrentFile',
     )![1];
     await handler();
 
@@ -204,7 +214,7 @@ describe('extension activate', () => {
     activate(mockContext);
 
     const handler = (vscode.commands.registerCommand as jest.Mock).mock.calls.find(
-      (c) => c[0] === 'reviewbot.reviewCurrentFile',
+      (c) => c[0] === 'alloy.reviewCurrentFile',
     )![1];
     await handler();
 
@@ -245,7 +255,7 @@ describe('extension activate', () => {
       jest.advanceTimersByTime(2000);
 
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
-        'reviewbot.reviewCurrentFile',
+        'alloy.reviewCurrentFile',
         { autoTrigger: true },
       );
 

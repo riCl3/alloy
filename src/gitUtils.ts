@@ -25,3 +25,14 @@ export async function getHeadContent(filePath: string, options?: GitOptions): Pr
     return null; // file is new, doesn't exist in HEAD
   }
 }
+
+export async function getChangedFiles(options?: GitOptions): Promise<string[]> {
+  const git = simpleGit(options?.repoPath).env('GIT_OPTIONAL_LOCKS', '0');
+  const output = await git.diff(['--name-only', 'HEAD']);
+  const repoPath = options?.repoPath ?? process.cwd();
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((relativePath) => path.resolve(repoPath, relativePath));
+}

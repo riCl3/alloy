@@ -6,6 +6,11 @@ import { runReviewGraph } from './reviewGraph';
 import { RepoStyleIndexer } from './repoStyleIndexer';
 import { storeFindings } from './findingsStore';
 import { AlloyCommentController } from './commentController';
+import { AlloyRuntimeConfig } from './types';
+import { buildReviewCacheKey, getCachedReview, setCachedReview } from './reviewCache';
+import { redactSensitiveText } from './redaction';
+import * as fs from 'fs';
+import * as path from 'path';
 
 
 let indexer: RepoStyleIndexer | null = null;
@@ -21,17 +26,31 @@ export interface ReviewDiffOptions {
   sourceCode: string;
   filePath: string;
   modifiedLines: number[];
+  config?: AlloyRuntimeConfig;
   uri: vscode.Uri;
   diagnosticCollection: vscode.DiagnosticCollection;
   commentController?: AlloyCommentController;
 }
 
 export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
-  const { diff, enumeratedDiff, sourceCode, filePath, modifiedLines, uri, diagnosticCollection, commentController } = options;
+  const { diff, enumeratedDiff, sourceCode, filePath, modifiedLines, uri, diagnosticCollection, commentController, config } = options;
 
   if (!diff.trim()) {
     diagnosticCollection.set(uri, []);
     commentController?.clearComments(uri);
+    return;
+  }
+
+  const reviewMode = config?.reviewMode ?? 'fast';
+  const model = config?.model ?? '';
+  const cacheKey = config ? buildReviewCacheKey(filePath, diff, model, reviewMode) : '';
+  const cached = config ? getCachedReview(filePath, cacheKey) : undefined;
+  if (cached) {
+    const diagnostics = buildDiagnostics(cached);
+    storeFindings(uri, cached);
+    diagnosticCollection.set(uri, diagnostics);
+    commentController?.setComments(uri, cached);
+    console.log(`[Alloy] Review cache hit: ${cached.length} finding(s)`);
     return;
   }
 
@@ -51,14 +70,22 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
     }
   }
 
+  const packageContext = readPackageContext(filePath);
+  const redactedDiff = redactSensitiveText(diff);
+  const redactedEnumeratedDiff = redactSensitiveText(enumeratedDiff);
+  const redactedFunctionContext = redactSensitiveText(functionContextStr);
+  const redactedSimilarFunctions = redactSensitiveText(similarFunctions);
+
   const initialState: ReviewState = {
-    diff,
-    enumeratedDiff,
+    diff: redactedDiff,
+    enumeratedDiff: redactedEnumeratedDiff,
     filePath,
     modifiedLines,
-    functionContext: functionContextStr,
-    similarFunctions,
-    singleAgent: true,
+    functionContext: redactedFunctionContext,
+    similarFunctions: redactedSimilarFunctions,
+    packageContext,
+    reviewMode,
+    singleAgent: reviewMode !== 'deep',
     securityFindings: [],
     logicFindings: [],
     styleFindings: [],
@@ -68,9 +95,45 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
   };
 
   const { finalFindings } = await runReviewGraph(initialState);
-  const diagnostics = buildDiagnostics(finalFindings);
-  storeFindings(uri, finalFindings);
+  const filteredFindings = filterFindings(finalFindings, config);
+  if (config) setCachedReview(filePath, cacheKey, filteredFindings);
+  const diagnostics = buildDiagnostics(filteredFindings);
+  storeFindings(uri, filteredFindings);
   diagnosticCollection.set(uri, diagnostics);
-  commentController?.setComments(uri, finalFindings);
-  console.log(`[Alloy] Review complete: ${finalFindings.length} findings, ${diagnostics.length} diagnostics`);
+  commentController?.setComments(uri, filteredFindings);
+  console.log(`[Alloy] Review complete: ${filteredFindings.length} findings, ${diagnostics.length} diagnostics`);
+}
+
+function filterFindings(findings: ReviewState['finalFindings'], config?: AlloyRuntimeConfig) {
+  if (!config) return findings;
+  const categories = new Set(config.enabledCategories);
+  const severities = new Set(config.enabledSeverities);
+  return findings.filter((finding) => {
+    const categoryOk = !finding.category || categories.has(finding.category);
+    return categoryOk && severities.has(finding.severity);
+  });
+}
+
+function readPackageContext(filePath: string): string {
+  let dir = path.dirname(filePath);
+  while (dir && dir !== path.dirname(dir)) {
+    const pkgPath = path.join(dir, 'package.json');
+    try {
+      const raw = fs.readFileSync(pkgPath, 'utf-8');
+      const pkg = JSON.parse(raw) as {
+        scripts?: Record<string, string>;
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      return [
+        'Package context:',
+        `Scripts: ${Object.keys(pkg.scripts ?? {}).join(', ') || 'none'}`,
+        `Dependencies: ${Object.keys(pkg.dependencies ?? {}).slice(0, 30).join(', ') || 'none'}`,
+        `Dev dependencies: ${Object.keys(pkg.devDependencies ?? {}).slice(0, 30).join(', ') || 'none'}`,
+      ].join('\n');
+    } catch {
+      dir = path.dirname(dir);
+    }
+  }
+  return '';
 }

@@ -14,6 +14,20 @@ const REVIEW_SCHEMA: Record<string, unknown> = {
           severity: { type: 'string', enum: ['error', 'warning', 'info'] },
           message: { type: 'string' },
           suggestion: { type: 'string' },
+          confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+          replacement: { type: 'string' },
+          rationale: { type: 'string' },
+          range: {
+            type: 'object',
+            properties: {
+              startLine: { type: 'integer' },
+              startCharacter: { type: 'integer' },
+              endLine: { type: 'integer' },
+              endCharacter: { type: 'integer' },
+            },
+            required: ['startLine', 'startCharacter', 'endLine', 'endCharacter'],
+            additionalProperties: false,
+          },
           category: {
             type: 'string',
             enum: ['security', 'logic', 'quality', 'performance', 'test'],
@@ -37,6 +51,8 @@ const ReviewAnnotation = Annotation.Root({
   modifiedLines: Annotation<number[]>({ value: overwrite<number[]>(), default: () => [] }),
   functionContext: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
   similarFunctions: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
+  packageContext: Annotation<string>({ value: overwrite<string>(), default: () => '' }),
+  reviewMode: Annotation<string>({ value: overwrite<string>(), default: () => 'fast' }),
   securityFindings: Annotation<ReviewFinding[]>({ value: overwrite<ReviewFinding[]>(), default: () => [] }),
   logicFindings: Annotation<ReviewFinding[]>({ value: overwrite<ReviewFinding[]>(), default: () => [] }),
   styleFindings: Annotation<ReviewFinding[]>({ value: overwrite<ReviewFinding[]>(), default: () => [] }),
@@ -54,6 +70,10 @@ const FIELD_GUIDE = [
   '- "severity": "error", "warning", or "info"',
   '- "message": One sentence describing the problem. MAX 100 characters. NEVER include code, file paths, or file content.',
   '- "suggestion": What to do INSTEAD — describe the better approach, not just what to remove. MAX 150 characters. NEVER include code.',
+  '- Optional "confidence": "high", "medium", or "low". Use "high" only when you are certain.',
+  '- Optional "range": exact current-file range to replace, using 1-based line numbers and 0-based characters.',
+  '- Optional "replacement": patch-ready replacement text. Include it ONLY for high-confidence local fixes.',
+  '- Optional "rationale": one short explanation of why the fix is safer.',
   'Return {"findings": []} if no issues found.',
   'Respond ONLY with the JSON object, no other text.',
 ].join('\n');
@@ -117,6 +137,14 @@ const SYSTEM_PROMPTS: Record<string, string> = {
     '   incomplete boundary conditions, missing error-path tests, unrealistic mocks.',
     '',
     'For each finding, include a "category" field: "security", "logic", "quality", "performance", or "test".',
+    'Prefer actionable issues that are line-specific and directly related to modified code.',
+    FIELD_GUIDE,
+  ].join('\n'),
+  architecture: [
+    'You are a senior architecture reviewer. Review the local git diff for design, maintainability, and correctness risks.',
+    'Focus on API boundaries, hidden coupling, state ownership, async flow, error handling, testability, and long-term maintainability.',
+    'Do not flag broad preferences. Only return concrete issues that a developer can act on in this diff.',
+    'For each finding, include a "category" field: "logic", "quality", "performance", "security", or "test".',
     FIELD_GUIDE,
   ].join('\n'),
 };
@@ -202,7 +230,50 @@ function sanitizeFinding(raw: Record<string, unknown>): ReviewFinding | null {
     ? (raw.category as ReviewFinding['category'])
     : undefined;
 
-  return { line, severity, message, suggestion, category };
+  const validConfidences: ReviewFinding['confidence'][] = ['low', 'medium', 'high'];
+  const confidence = validConfidences.includes(raw.confidence as ReviewFinding['confidence'])
+    ? (raw.confidence as ReviewFinding['confidence'])
+    : undefined;
+  const replacement = typeof raw.replacement === 'string' && raw.replacement.trim().length > 0
+    ? raw.replacement
+    : undefined;
+  const rationale = sanitizeMessage(typeof raw.rationale === 'string' ? raw.rationale : '', 180) || undefined;
+  const range = sanitizeRange(raw.range, line);
+  const id = buildFindingId({ line, severity, message, suggestion, category });
+
+  return { id, line, severity, message, suggestion, category, confidence, replacement, rationale, range };
+}
+
+function sanitizeRange(raw: unknown, fallbackLine: number): ReviewFinding['range'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const startLine = toPositiveInt(record.startLine);
+  const endLine = toPositiveInt(record.endLine);
+  const startCharacter = toNonNegativeInt(record.startCharacter);
+  const endCharacter = toNonNegativeInt(record.endCharacter);
+  if (!startLine || !endLine || startCharacter === undefined || endCharacter === undefined) return undefined;
+  if (startLine > endLine) return undefined;
+  if (startLine !== fallbackLine && endLine !== fallbackLine) return undefined;
+  return { startLine, startCharacter, endLine, endCharacter };
+}
+
+function toPositiveInt(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function toNonNegativeInt(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function buildFindingId(finding: Pick<ReviewFinding, 'line' | 'severity' | 'message' | 'suggestion' | 'category'>): string {
+  const basis = `${finding.line}:${finding.severity}:${finding.category ?? 'general'}:${finding.message}:${finding.suggestion}`;
+  let hash = 0;
+  for (let i = 0; i < basis.length; i++) {
+    hash = ((hash << 5) - hash + basis.charCodeAt(i)) | 0;
+  }
+  return `alloy-${finding.line}-${Math.abs(hash).toString(36)}`;
 }
 
 export function parseFindings(text: string): ReviewFinding[] {
@@ -301,6 +372,7 @@ function buildComprehensivePrompt(diff: string, functionContext: string, similar
   if (similarFunctions) {
     parts.push('Similar codebase patterns:', similarFunctions, '');
   }
+  parts.push('Review constraints:', 'Only flag actionable problems introduced or exposed by changed lines.', '');
   parts.push('Changed code (lines prefixed with [Line N]; lines ending in <-- MODIFIED were changed):', diff);
   return parts.join('\n');
 }
@@ -308,8 +380,10 @@ function buildComprehensivePrompt(diff: string, functionContext: string, similar
 async function comprehensiveReviewer(state: GraphState): Promise<Partial<GraphState>> {
   try {
     const diffForPrompt = state.enumeratedDiff || state.diff;
-    const prompt = buildComprehensivePrompt(diffForPrompt, state.functionContext, state.similarFunctions);
-    const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS.comprehensive, responseSchema: REVIEW_SCHEMA });
+    const promptParts = [buildComprehensivePrompt(diffForPrompt, state.functionContext, state.similarFunctions)];
+    if (state.packageContext) promptParts.push('', state.packageContext);
+    const systemPrompt = state.reviewMode === 'architecture' ? SYSTEM_PROMPTS.architecture : SYSTEM_PROMPTS.comprehensive;
+    const response = await callLLM({ prompt: promptParts.join('\n'), systemPrompt, responseSchema: REVIEW_SCHEMA });
     const findings = parseFindings(response.text);
     return { finalFindings: findings };
   } catch (err) {
@@ -424,6 +498,8 @@ export async function runReviewGraph(initialState: ReviewState): Promise<{ final
     modifiedLines: initialState.modifiedLines,
     functionContext: initialState.functionContext,
     similarFunctions: initialState.similarFunctions,
+    packageContext: initialState.packageContext ?? '',
+    reviewMode: initialState.reviewMode ?? 'fast',
     securityFindings: [],
     logicFindings: [],
     styleFindings: [],

@@ -24,25 +24,113 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically review code on save with a 2-second debounce"
+        },
+        "alloy.provider": {
+          "type": "string",
+          "enum": ["groq", "gemini", "openaiCompatible", "ollama"],
+          "default": "groq",
+          "description": "LLM provider Alloy uses for reviews"
+        },
+        "alloy.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model name for the selected provider. Leave empty to use Alloy's default."
+        },
+        "alloy.reviewMode": {
+          "type": "string",
+          "enum": ["fast", "deep", "architecture"],
+          "default": "fast",
+          "description": "Review depth and focus"
+        },
+        "alloy.maxDiffLines": {
+          "type": "number",
+          "default": 600,
+          "description": "Skip reviews for diffs larger than this many lines"
+        },
+        "alloy.maxFilesPerReview": {
+          "type": "number",
+          "default": 12,
+          "description": "Maximum changed files reviewed by Alloy: Review All Changed Files"
+        },
+        "alloy.skipPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Glob patterns Alloy should skip"
+        },
+        "alloy.enabledCategories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["security", "logic", "quality", "performance", "test"]
+          },
+          "default": ["security", "logic", "quality", "performance", "test"],
+          "description": "Finding categories Alloy should show"
+        },
+        "alloy.enabledSeverities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["error", "warning", "info"]
+          },
+          "default": ["error", "warning", "info"],
+          "description": "Finding severities Alloy should show"
+        },
+        "alloy.debounceMs": {
+          "type": "number",
+          "default": 2000,
+          "description": "Debounce duration for review on save"
         }
       }
     },
     "commands": [
       {
-        "command": "reviewbot.reviewCurrentFile",
-        "title": "ReviewBot: Review Current File",
+        "command": "alloy.openMenu",
+        "title": "Alloy",
         "icon": {
           "light": "resources/icon.png",
           "dark": "resources/icon.png"
         }
+      },
+      {
+        "command": "alloy.setup",
+        "title": "Alloy: Setup"
+      },
+      {
+        "command": "alloy.reviewCurrentFile",
+        "title": "Alloy: Review Current File",
+        "icon": {
+          "light": "resources/icon.png",
+          "dark": "resources/icon.png"
+        }
+      },
+      {
+        "command": "alloy.reviewAllChangedFiles",
+        "title": "Alloy: Review All Changed Files"
+      },
+      {
+        "command": "alloy.clearFindings",
+        "title": "Alloy: Clear Findings"
+      },
+      {
+        "command": "reviewbot.reviewCurrentFile",
+        "title": "ReviewBot: Review Current File (Legacy)"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "alloyFindings",
+          "name": "Alloy Findings"
+        }
+      ]
+    },
     "menus": {
       "editor/title": [
         {
-          "command": "reviewbot.reviewCurrentFile",
+          "command": "alloy.openMenu",
           "group": "navigation",
-          "when": "editorLangId =~ /typescript|javascript|python/"
+          "when": "editorLangId =~ /typescript|javascript/"
         }
       ]
     }

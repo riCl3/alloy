@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { getFindings } from './findingsStore';
+import { ReviewFinding } from './types';
 
 export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
   static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
@@ -19,26 +20,22 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
       const lineText = line.text;
       const langId = document.languageId;
       const zeroBasedLine = diagnostic.range.start.line;
-
-      // Try to find matching finding from store
-      const finding = storedFindings.find(
-        (f) => Math.max(0, f.line - 1) === zeroBasedLine,
-      );
+      const finding = storedFindings.find((f) => Math.max(0, f.line - 1) === zeroBasedLine);
       const suggestion = finding?.suggestion || diagnostic.message;
 
-      // "Show explanation" action — works with or without stored finding
-      const explainAction = new vscode.CodeAction(
-        `Alloy: Explain issue on line ${zeroBasedLine + 1}`,
-        vscode.CodeActionKind.QuickFix,
-      );
-      explainAction.diagnostics = [diagnostic];
-      explainAction.command = {
-        title: 'Explain issue',
-        command: 'alloy.showIssue',
-        arguments: [diagnostic.message, suggestion],
-      };
+      if (finding && canApplyFinding(finding, document)) {
+        const applyAction = new vscode.CodeAction(
+          `Alloy: Apply fix on line ${zeroBasedLine + 1}`,
+          vscode.CodeActionKind.QuickFix,
+        );
+        applyAction.diagnostics = [diagnostic];
+        applyAction.isPreferred = true;
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(document.uri, toVsCodeRange(finding.range!), finding.replacement!);
+        applyAction.edit = edit;
+        actions.push(applyAction);
+      }
 
-      // "Insert fix as comment" action — always shown if we have any message text
       if (suggestion) {
         const { prefix, suffix } = getCommentSyntax(langId);
         const sanitizedSuggestion = sanitizeForComment(suggestion, suffix);
@@ -47,7 +44,6 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
           vscode.CodeActionKind.QuickFix,
         );
         commentAction.diagnostics = [diagnostic];
-        commentAction.isPreferred = true;
         const edit = new vscode.WorkspaceEdit();
         edit.insert(
           document.uri,
@@ -58,7 +54,6 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
         actions.push(commentAction);
       }
 
-      // "Ignore this finding" action — always shown
       const { prefix: ignorePrefix, suffix: ignoreSuffix } = getCommentSyntax(langId);
       const ignoreAction = new vscode.CodeAction(
         `Alloy: Ignore issue on line ${zeroBasedLine + 1}`,
@@ -75,11 +70,53 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
       ignoreAction.edit = ignoreEdit;
       actions.push(ignoreAction);
 
+      const copyAction = new vscode.CodeAction(
+        `Alloy: Copy suggestion on line ${zeroBasedLine + 1}`,
+        vscode.CodeActionKind.QuickFix,
+      );
+      copyAction.diagnostics = [diagnostic];
+      copyAction.command = {
+        title: 'Copy suggestion',
+        command: 'alloy.copySuggestion',
+        arguments: [suggestion],
+      };
+      actions.push(copyAction);
+
+      const explainAction = new vscode.CodeAction(
+        `Alloy: Explain issue on line ${zeroBasedLine + 1}`,
+        vscode.CodeActionKind.QuickFix,
+      );
+      explainAction.diagnostics = [diagnostic];
+      explainAction.command = {
+        title: 'Explain issue',
+        command: 'alloy.showIssue',
+        arguments: [diagnostic.message, suggestion, finding?.rationale],
+      };
       actions.push(explainAction);
     }
 
     return actions;
   }
+}
+
+export function canApplyFinding(finding: ReviewFinding, document: vscode.TextDocument): boolean {
+  if (finding.confidence !== 'high' || !finding.replacement || !finding.range) return false;
+  const range = finding.range;
+  if (range.startLine < 1 || range.endLine < range.startLine) return false;
+  if (range.startCharacter < 0 || range.endCharacter < 0) return false;
+  if (range.endLine > document.lineCount) return false;
+  const startLine = document.lineAt(range.startLine - 1);
+  const endLine = document.lineAt(range.endLine - 1);
+  return range.startCharacter <= startLine.text.length && range.endCharacter <= endLine.text.length;
+}
+
+function toVsCodeRange(range: NonNullable<ReviewFinding['range']>): vscode.Range {
+  return new vscode.Range(
+    range.startLine - 1,
+    range.startCharacter,
+    range.endLine - 1,
+    range.endCharacter,
+  );
 }
 
 function sanitizeForComment(text: string, suffix: string): string {

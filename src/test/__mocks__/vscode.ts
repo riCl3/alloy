@@ -72,6 +72,37 @@ export const CodeActionKind = {
   QuickFix: { value: 'quickfix' },
 };
 
+export const ConfigurationTarget = {
+  Global: 1,
+  Workspace: 2,
+  WorkspaceFolder: 3,
+};
+
+export const TreeItemCollapsibleState = {
+  None: 0,
+  Collapsed: 1,
+  Expanded: 2,
+};
+
+export class EventEmitter<T = unknown> {
+  event = jest.fn((_listener: (e: T) => unknown) => ({ dispose: jest.fn() }));
+  fire = jest.fn();
+  dispose = jest.fn();
+}
+
+export class TreeItem {
+  label: any;
+  collapsibleState: any;
+  description: any;
+  resourceUri: any;
+  tooltip: any;
+  command: any;
+  constructor(label: any, collapsibleState?: any) {
+    this.label = label;
+    this.collapsibleState = collapsibleState;
+  }
+}
+
 export const languages = {
   createDiagnosticCollection: jest.fn().mockReturnValue({
     set: jest.fn(),
@@ -90,10 +121,13 @@ export const workspace = {
   getWorkspaceFolder: jest.fn(),
   getConfiguration: jest.fn().mockReturnValue({
     get: jest.fn().mockReturnValue(true),
+    update: jest.fn(),
   }),
   onDidSaveTextDocument: jest.fn().mockReturnValue({ dispose: jest.fn() }),
   textDocuments: [],
   registerTextDocumentContentProvider: jest.fn(),
+  openTextDocument: jest.fn(),
+  workspaceFolders: undefined as any,
 };
 
 export enum ExtensionMode {
@@ -136,8 +170,10 @@ export const window = {
   showWarningMessage: jest.fn(),
   showInformationMessage: jest.fn(),
   showInputBox: jest.fn(),
+  showQuickPick: jest.fn(),
   activeTextEditor: undefined,
   withProgress: jest.fn(),
+  createTreeView: jest.fn().mockReturnValue({ dispose: jest.fn() }),
   createWebviewPanel: jest.fn().mockReturnValue({
     webview: { html: '' },
     dispose: jest.fn(),
