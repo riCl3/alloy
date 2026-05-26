@@ -3,3 +3,6 @@ out/
 *.vsix
 coverage/
 .vscode-test/
+.opencode
+.openclaude
+.vscode
