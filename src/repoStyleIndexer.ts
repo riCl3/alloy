@@ -1,5 +1,6 @@
 import { VectorStore, IndexedFunction, type StoreSnapshot } from './vectorStore';
 import { detectLanguage, getFunctionContext } from './astContext';
+import { SUPPORTED_EXTENSIONS } from './ignore';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -7,8 +8,6 @@ export interface IndexerOptions {
   geminiApiKey?: string;
   embeddingModel?: string;
 }
-
-const SUPPORTED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs']);
 
 function walkDirectory(dir: string, maxDepth = 10, depth = 0): string[] {
   if (depth > maxDepth) return [];
@@ -131,32 +130,29 @@ export class RepoStyleIndexer {
     return this.cacheDir ? path.join(this.cacheDir, CACHE_FILENAME) : null;
   }
 
-  private loadFromCache(): boolean {
+  private async loadFromCache(): Promise<boolean> {
     const filePath = this.cachePath();
     if (!filePath) return false;
     try {
-      if (!fs.existsSync(filePath)) return false;
-      const raw = fs.readFileSync(filePath, 'utf-8');
+      await fs.promises.access(filePath);
+      const raw = await fs.promises.readFile(filePath, 'utf-8');
       const data = JSON.parse(raw) as StoreSnapshot;
       this.store.load(data);
       console.log(`[Alloy Indexer] Loaded ${this.store.size} indexed functions from cache`);
       return true;
-    } catch (err) {
-      console.warn(`[Alloy Indexer] Failed to load cache: ${(err as Error).message}`);
+    } catch {
       return false;
     }
   }
 
-  private saveToCache(): void {
+  private async saveToCache(): Promise<void> {
     const filePath = this.cachePath();
     if (!filePath) return;
     try {
       const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
+      await fs.promises.mkdir(dir, { recursive: true });
       const data = this.store.snapshot();
-      fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
+      await fs.promises.writeFile(filePath, JSON.stringify(data), 'utf-8');
       console.log(`[Alloy Indexer] Saved ${this.store.size} indexed functions to cache`);
     } catch (err) {
       console.warn(`[Alloy Indexer] Failed to save cache: ${(err as Error).message}`);
@@ -166,14 +162,14 @@ export class RepoStyleIndexer {
   async initialize(workspacePath: string, cacheDir?: string): Promise<void> {
     this.cacheDir = cacheDir ?? null;
 
-    const loaded = this.loadFromCache();
+    const loaded = await this.loadFromCache();
 
     const files = walkDirectory(workspacePath);
     const filesToIndex: string[] = [];
 
     for (const filePath of files) {
       try {
-        const stat = fs.statSync(filePath);
+        const stat = await fs.promises.stat(filePath);
         const mtime = stat.mtimeMs;
         if (loaded && !this.store.hasFileChanged(filePath, mtime)) {
           continue;
@@ -197,7 +193,7 @@ export class RepoStyleIndexer {
       try {
         // Remove stale entries for this file before re-indexing
         this.store.removeFile(filePath);
-        const sourceCode = fs.readFileSync(filePath, 'utf-8');
+        const sourceCode = await fs.promises.readFile(filePath, 'utf-8');
         const functions = await extractAllFunctions(filePath, sourceCode);
         allFunctions.push(...functions);
       } catch {
@@ -224,7 +220,7 @@ export class RepoStyleIndexer {
       }
     }
 
-    this.saveToCache();
+    await this.saveToCache();
   }
 
   async querySimilar(sourceCode: string, modifiedLines: number[], filePath: string, k = 3): Promise<string> {

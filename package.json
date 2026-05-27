@@ -80,6 +80,12 @@
           "type": "number",
           "default": 2000,
           "description": "Debounce duration for review on save"
+        },
+        "alloy.findingsGroupBy": {
+          "type": "string",
+          "enum": ["file", "severity", "category"],
+          "default": "file",
+          "description": "How to group findings in the Alloy Findings tree view"
         }
       }
     },
@@ -88,8 +94,8 @@
         "command": "alloy.openMenu",
         "title": "Alloy",
         "icon": {
-          "light": "resources/icon.png",
-          "dark": "resources/icon.png"
+          "light": "resources/icon-light.png",
+          "dark": "resources/icon-dark.png"
         }
       },
       {
@@ -100,8 +106,8 @@
         "command": "alloy.reviewCurrentFile",
         "title": "Alloy: Review Current File",
         "icon": {
-          "light": "resources/icon.png",
-          "dark": "resources/icon.png"
+          "light": "resources/icon-light.png",
+          "dark": "resources/icon-dark.png"
         }
       },
       {
@@ -113,8 +119,57 @@
         "title": "Alloy: Clear Findings"
       },
       {
-        "command": "reviewbot.reviewCurrentFile",
-        "title": "ReviewBot: Review Current File (Legacy)"
+        "command": "alloy.dismissFinding",
+        "title": "Alloy: Dismiss Finding"
+      },
+      {
+        "command": "alloy.dismissAllInFile",
+        "title": "Alloy: Dismiss All in File"
+      },
+      {
+        "command": "alloy.copyFinding",
+        "title": "Alloy: Copy Finding"
+      },
+      {
+        "command": "alloy.groupByFile",
+        "title": "Group by File"
+      },
+      {
+        "command": "alloy.groupBySeverity",
+        "title": "Group by Severity"
+      },
+      {
+        "command": "alloy.groupByCategory",
+        "title": "Group by Category"
+      },
+      {
+        "command": "alloy.filterFindings",
+        "title": "Alloy: Filter Findings",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "alloy.generatePRDescription",
+        "title": "Alloy: Generate PR Description"
+      },
+      {
+        "command": "alloy.openRulesFile",
+        "title": "Alloy: Open Custom Rules File"
+      },
+      {
+        "command": "alloy.exportFindingsJSON",
+        "title": "Alloy: Export Findings (JSON)"
+      },
+      {
+        "command": "alloy.exportFindingsMarkdown",
+        "title": "Alloy: Export Findings (Markdown)"
+      },
+      {
+        "command": "alloy.reviewStagedCurrentFile",
+        "title": "Alloy: Review Staged Changes (Current File)"
+      },
+      {
+        "command": "alloy.reviewAllStagedFiles",
+        "title": "Alloy: Review All Staged Files"
       }
     ],
     "views": {
@@ -130,7 +185,51 @@
         {
           "command": "alloy.openMenu",
           "group": "navigation",
-          "when": "editorLangId =~ /typescript|javascript/"
+          "when": "editorLangId =~ /typescript|javascript|python|go|rust|java|csharp|php|ruby|vue|svelte|kotlin|swift|c|cpp/"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "alloy.filterFindings",
+          "when": "view == alloyFindings",
+          "group": "navigation"
+        },
+        {
+          "command": "alloy.groupByFile",
+          "when": "view == alloyFindings",
+          "group": "navigation"
+        },
+        {
+          "command": "alloy.groupBySeverity",
+          "when": "view == alloyFindings",
+          "group": "navigation"
+        },
+        {
+          "command": "alloy.groupByCategory",
+          "when": "view == alloyFindings",
+          "group": "navigation"
+        },
+        {
+          "command": "alloy.clearFindings",
+          "when": "view == alloyFindings",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "alloy.dismissFinding",
+          "when": "view == alloyFindings && viewItem == alloyFinding",
+          "group": "alloy@1"
+        },
+        {
+          "command": "alloy.copyFinding",
+          "when": "view == alloyFindings && viewItem == alloyFinding",
+          "group": "alloy@2"
+        },
+        {
+          "command": "alloy.dismissAllInFile",
+          "when": "view == alloyFindings && viewItem == alloyFile",
+          "group": "alloy@1"
         }
       ]
     }

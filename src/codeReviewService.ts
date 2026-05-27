@@ -11,6 +11,7 @@ import { buildReviewCacheKey, getCachedReview, setCachedReview } from './reviewC
 import { redactSensitiveText } from './redaction';
 import * as fs from 'fs';
 import * as path from 'path';
+import { loadCustomRules, buildCustomRulesPrompt, applyPatternRules } from './customRules';
 
 
 let indexer: RepoStyleIndexer | null = null;
@@ -70,7 +71,7 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
     }
   }
 
-  const packageContext = readPackageContext(filePath);
+  const packageContext = await readPackageContext(filePath);
   const redactedDiff = redactSensitiveText(diff);
   const redactedEnumeratedDiff = redactSensitiveText(enumeratedDiff);
   const redactedFunctionContext = redactSensitiveText(functionContextStr);
@@ -94,8 +95,18 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
     finalFindings: [],
   };
 
+  // Load and apply custom rules
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+  const customRules = workspaceFolder ? loadCustomRules(workspaceFolder.uri.fsPath) : [];
+  const customRulesPrompt = buildCustomRulesPrompt(customRules);
+  if (customRulesPrompt) {
+    initialState.functionContext += customRulesPrompt;
+  }
+  const patternFindings = customRules.length > 0 ? applyPatternRules(customRules, diff) : [];
+
   const { finalFindings } = await runReviewGraph(initialState);
-  const filteredFindings = filterFindings(finalFindings, config);
+  const allFindings = [...finalFindings, ...patternFindings];
+  const filteredFindings = filterFindings(allFindings, config);
   if (config) setCachedReview(filePath, cacheKey, filteredFindings);
   const diagnostics = buildDiagnostics(filteredFindings);
   storeFindings(uri, filteredFindings);
@@ -114,12 +125,12 @@ function filterFindings(findings: ReviewState['finalFindings'], config?: AlloyRu
   });
 }
 
-function readPackageContext(filePath: string): string {
+async function readPackageContext(filePath: string): Promise<string> {
   let dir = path.dirname(filePath);
   while (dir && dir !== path.dirname(dir)) {
     const pkgPath = path.join(dir, 'package.json');
     try {
-      const raw = fs.readFileSync(pkgPath, 'utf-8');
+      const raw = await fs.promises.readFile(pkgPath, 'utf-8');
       const pkg = JSON.parse(raw) as {
         scripts?: Record<string, string>;
         dependencies?: Record<string, string>;

@@ -2,13 +2,13 @@ import * as vscode from 'vscode';
 import { LLMProviderId } from './types';
 import { providerDefaultModel } from './config';
 
-const KEY_IDS: Record<Exclude<LLMProviderId, 'ollama'>, string> = {
+export const KEY_IDS: Record<Exclude<LLMProviderId, 'ollama'>, string> = {
   groq: 'alloy.groqApiKey',
   gemini: 'alloy.geminiApiKey',
   openaiCompatible: 'alloy.openaiCompatibleApiKey',
 };
 
-const BASE_URL_IDS: Partial<Record<LLMProviderId, string>> = {
+export const BASE_URL_IDS: Partial<Record<LLMProviderId, string>> = {
   openaiCompatible: 'alloy.openaiCompatibleBaseUrl',
   ollama: 'alloy.ollamaBaseUrl',
 };
@@ -62,7 +62,7 @@ function baseUrlEnvKey(provider: LLMProviderId): string {
   }
 }
 
-async function getKeyFromStorage(secrets: vscode.SecretStorage, keyId: string): Promise<string | undefined> {
+export async function getKeyFromStorage(secrets: vscode.SecretStorage, keyId: string): Promise<string | undefined> {
   try {
     return await secrets.get(keyId);
   } catch {
@@ -157,6 +157,38 @@ export async function ensureProviderReady(
     throw new Error(`Alloy: ${provider} API key is missing. Run "Alloy: Setup" to configure it.`);
   }
   return credentials;
+}
+
+export async function getProviderStatus(context: vscode.ExtensionContext): Promise<Record<LLMProviderId, 'configured' | 'unconfigured'>> {
+  const providers: LLMProviderId[] = ['groq', 'gemini', 'openaiCompatible', 'ollama'];
+  const status: Record<string, 'configured' | 'unconfigured'> = {};
+  for (const p of providers) {
+    if (p === 'ollama') {
+      const baseUrl = await getKeyFromStorage(context.secrets, BASE_URL_IDS.ollama ?? '');
+      status[p] = baseUrl ? 'configured' : 'unconfigured';
+    } else {
+      const key = await getKeyFromStorage(context.secrets, KEY_IDS[p]);
+      status[p] = key ? 'configured' : 'unconfigured';
+    }
+  }
+  return status as Record<LLMProviderId, 'configured' | 'unconfigured'>;
+}
+
+export async function saveProviderCredentials(
+  context: vscode.ExtensionContext,
+  provider: LLMProviderId,
+  apiKey: string,
+  baseUrl: string,
+): Promise<void> {
+  if (provider !== 'ollama' && apiKey) {
+    await context.secrets.store(KEY_IDS[provider], apiKey);
+    cachedKeys.set(provider, apiKey);
+  }
+  const baseUrlId = BASE_URL_IDS[provider];
+  if (baseUrl && baseUrlId) {
+    await context.secrets.store(baseUrlId, baseUrl);
+    cachedBaseUrls.set(provider, baseUrl);
+  }
 }
 
 // Backward-compatible helper for existing tests and callers.

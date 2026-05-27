@@ -68,8 +68,8 @@ const FIELD_GUIDE = [
   'Each issue has: line, severity, message, suggestion.',
   '- "line": Line number from the "[Line N]" prefix shown in the changed code below (this is the absolute line number in the current file)',
   '- "severity": "error", "warning", or "info"',
-  '- "message": One sentence describing the problem. MAX 100 characters. NEVER include code, file paths, or file content.',
-  '- "suggestion": What to do INSTEAD — describe the better approach, not just what to remove. MAX 150 characters. NEVER include code.',
+  '- "message": One sentence describing the problem in PLAIN ENGLISH. MAX 100 characters. NEVER include code, file paths, code snippets, or file content. Example: "SQL injection risk from unparameterized query" NOT "const q = `SELECT * FROM ${table}`"',
+  '- "suggestion": What to do INSTEAD — describe the better approach in PLAIN ENGLISH. MAX 150 characters. NEVER include code snippets. Example: "Use parameterized queries to prevent SQL injection" NOT code examples',
   '- Optional "confidence": "high", "medium", or "low". Use "high" only when you are certain.',
   '- Optional "range": exact current-file range to replace, using 1-based line numbers and 0-based characters.',
   '- Optional "replacement": patch-ready replacement text. Include it ONLY for high-confidence local fixes.',
@@ -173,6 +173,7 @@ function buildPersonaPrompt(persona: string, enumeratedDiff: string, functionCon
 }
 
 function looksLikeCode(text: string): boolean {
+  const trimmed = text.trim();
   const patterns = [
     /^import\s/,
     /^export\s/,
@@ -191,17 +192,46 @@ function looksLikeCode(text: string): boolean {
     /<[A-Z]\w+/,
     /<\/\w+>/,
     /^\s*\}\s*$/,
+    /^\s*(if|for|while|switch|try|catch|return|throw|await|async)\s*[\({]/,
+    /;\s*$/,
+    /^\s*\w+\s*[=!<>]+\s*\w+/,
+    /^\s*\w+\.\w+\(/,
+    /^\s*\/\//,
+    /^\s*\/\*/,
   ];
-  return patterns.some((p) => p.test(text.trim()));
+  return patterns.some((p) => p.test(trimmed));
+}
+
+function extractFromCodeLikeText(text: string): string {
+  // Try extracting from comments: // ... or /* ... */
+  const lineComment = text.match(/(?:\/\/|\/\*|#)\s*(.{15,})/);
+  if (lineComment) {
+    const extracted = lineComment[1].replace(/\*\/\s*$/, '').trim();
+    if (!looksLikeCode(extracted)) return extracted;
+  }
+  // Try stripping inline code backticks
+  const withoutBackticks = text.replace(/`([^`]+)`/g, '$1').trim();
+  if (withoutBackticks.length >= 15 && !looksLikeCode(withoutBackticks)) {
+    return withoutBackticks;
+  }
+  return '';
 }
 
 function sanitizeMessage(text: string, maxLen = 80): string {
   if (!text) return '';
-  const cleaned = text
+  // Strip markdown code fences and inline backticks
+  let cleaned = text
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`([^`]+)`/g, '$1')
     .replace(/[\r\n]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  if (looksLikeCode(cleaned)) return '';
+  if (!cleaned) return '';
+  if (looksLikeCode(cleaned)) {
+    const extracted = extractFromCodeLikeText(cleaned);
+    if (!extracted) return '';
+    cleaned = extracted;
+  }
   if (cleaned.length > maxLen) {
     return cleaned.slice(0, maxLen - 3) + '...';
   }
@@ -220,7 +250,14 @@ function sanitizeFinding(raw: Record<string, unknown>): ReviewFinding | null {
   let message = sanitizeMessage(typeof raw.message === 'string' ? raw.message : '');
 
   if (!message) {
-    message = `${severity === 'error' ? 'Issue' : severity === 'warning' ? 'Warning' : 'Note'} found at line ${line}`;
+    // Try deriving from suggestion field
+    const suggestionRaw = typeof raw.suggestion === 'string' ? raw.suggestion : '';
+    const derivedFromSuggestion = sanitizeMessage(suggestionRaw, 80);
+    if (derivedFromSuggestion) {
+      message = derivedFromSuggestion;
+    } else {
+      message = `${severity === 'error' ? 'Issue' : severity === 'warning' ? 'Warning' : 'Note'} found at line ${line}`;
+    }
   }
 
   let suggestion = sanitizeMessage(typeof raw.suggestion === 'string' ? raw.suggestion : '', 150);
