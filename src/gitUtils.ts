@@ -36,3 +36,19 @@ export async function getChangedFiles(options?: GitOptions): Promise<string[]> {
     .filter(Boolean)
     .map((relativePath) => path.resolve(repoPath, relativePath));
 }
+
+export async function getStagedDiffForFile(filePath: string, options?: GitOptions): Promise<string> {
+  const git = simpleGit(options?.repoPath).env('GIT_OPTIONAL_LOCKS', '0');
+  return await git.diff(['--cached', '--', filePath]);
+}
+
+export async function getStagedFiles(options?: GitOptions): Promise<string[]> {
+  const git = simpleGit(options?.repoPath).env('GIT_OPTIONAL_LOCKS', '0');
+  const output = await git.diff(['--cached', '--name-only']);
+  const repoPath = options?.repoPath ?? process.cwd();
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((relativePath) => path.resolve(repoPath, relativePath));
+}

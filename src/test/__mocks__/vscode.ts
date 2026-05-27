@@ -90,6 +90,22 @@ export class EventEmitter<T = unknown> {
   dispose = jest.fn();
 }
 
+export class ThemeColor {
+  id: string;
+  constructor(id: string) {
+    this.id = id;
+  }
+}
+
+export class ThemeIcon {
+  id: string;
+  color?: ThemeColor;
+  constructor(id: string, color?: ThemeColor) {
+    this.id = id;
+    this.color = color;
+  }
+}
+
 export class TreeItem {
   label: any;
   collapsibleState: any;
@@ -97,6 +113,8 @@ export class TreeItem {
   resourceUri: any;
   tooltip: any;
   command: any;
+  iconPath: any;
+  contextValue: any;
   constructor(label: any, collapsibleState?: any) {
     this.label = label;
     this.collapsibleState = collapsibleState;
@@ -162,6 +180,8 @@ export const window = {
   createStatusBarItem: jest.fn().mockReturnValue({
     text: '',
     tooltip: '',
+    command: '',
+    backgroundColor: undefined,
     show: jest.fn(),
     hide: jest.fn(),
     dispose: jest.fn(),
@@ -193,8 +213,11 @@ export const CommentThreadCollapsibleState = {
 export class MarkdownString {
   value: string;
   isTrusted?: boolean;
-  constructor(value: string) {
-    this.value = value;
+  appendMarkdown = jest.fn().mockReturnThis();
+  appendText = jest.fn().mockReturnThis();
+  appendCodeblock = jest.fn().mockReturnThis();
+  constructor(value?: string) {
+    this.value = value ?? '';
   }
 }
 
