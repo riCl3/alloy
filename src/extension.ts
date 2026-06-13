@@ -1,18 +1,21 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { getChangedFiles, getDiffForFile, getHeadContent } from './gitUtils';
+import { getChangedFiles, getDiffForFile, getHeadContent, getStagedDiffForFile, getStagedFiles } from './gitUtils';
 import { parseUnifiedDiff, buildEnumeratedDiff } from './diffParser';
 import { reviewDiff } from './codeReviewService';
-import { ensureProviderReady, setupProvider } from './secretManager';
-import { validateProvider } from './llmRouter';
+import { ensureProviderReady } from './secretManager';
 import { AlloyCodeActionProvider } from './codeActionProvider';
 import { AlloyCommentController } from './commentController';
 import { AlloyFindingsTree } from './findingsTree';
-import { getAlloyConfig, providerDefaultModel } from './config';
-import { LLMProviderId, ReviewFinding } from './types';
-import { clearFindings, getFindings } from './findingsStore';
+import { getAlloyConfig } from './config';
+import { ReviewFinding } from './types';
+import { clearFindings, getFindings, getAllFindings, getAllFindingsMap, onDidChangeFindings } from './findingsStore';
 import { clearReviewCache } from './reviewCache';
 import { isSupportedSourceFile, shouldSkipPath } from './ignore';
+import { SetupPanel } from './panels/SetupPanel';
+import { exportFindingsJSON, exportFindingsMarkdown } from './export';
+import { generatePRDescription } from './prDescriptionGenerator';
+import { RateLimiter } from './rateLimiter';
 
 const HEAD_SCHEME = 'alloy-head';
 
@@ -32,8 +35,10 @@ export function activate(context: vscode.ExtensionContext) {
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.tooltip = 'Alloy review status';
-  statusBarItem.hide();
+  statusBarItem.command = 'alloyFindings.focus';
+  updateStatusBar(statusBarItem);
   context.subscriptions.push(statusBarItem);
+  context.subscriptions.push(onDidChangeFindings(() => updateStatusBar(statusBarItem)));
 
   const headProvider = createHeadProvider();
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(HEAD_SCHEME, headProvider));
@@ -125,22 +130,7 @@ function registerCommands(
   });
 
   const setup = vscode.commands.registerCommand('alloy.setup', async () => {
-    const provider = await chooseProvider();
-    if (!provider) return;
-
-    try {
-      const result = await setupProvider(context, provider);
-      await vscode.workspace.getConfiguration('alloy').update('provider', result.provider, vscode.ConfigurationTarget.Global);
-      await vscode.workspace.getConfiguration('alloy').update('model', result.model || providerDefaultModel(result.provider), vscode.ConfigurationTarget.Global);
-      await validateProvider(result.provider, {
-        apiKey: result.apiKey,
-        baseUrl: result.baseUrl,
-        model: result.model,
-      });
-      vscode.window.showInformationMessage(`Alloy: ${providerLabel(result.provider)} is configured.`);
-    } catch (err) {
-      vscode.window.showErrorMessage(`Alloy setup failed: ${(err as Error).message}`);
-    }
+    await SetupPanel.createOrShow(context);
   });
 
   const showIssue = vscode.commands.registerCommand('alloy.showIssue', (message: string, suggestion: string, rationale?: string) => {
@@ -161,12 +151,59 @@ function registerCommands(
     await reviewActiveEditor(context, statusBarItem, headProvider, args?.autoTrigger === true);
   });
 
-  const legacyReviewCurrent = vscode.commands.registerCommand('reviewbot.reviewCurrentFile', async (args?: { autoTrigger?: boolean }) => {
-    await reviewActiveEditor(context, statusBarItem, headProvider, args?.autoTrigger === true);
-  });
-
   const reviewAll = vscode.commands.registerCommand('alloy.reviewAllChangedFiles', async () => {
     await reviewAllChangedFiles(context, statusBarItem);
+  });
+
+  const reviewStagedCurrent = vscode.commands.registerCommand('alloy.reviewStagedCurrentFile', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showWarningMessage('Alloy: No active editor.');
+      return;
+    }
+    const filePath = editor.document.uri.fsPath;
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+    if (!workspaceFolder) {
+      vscode.window.showWarningMessage('Alloy: File is not in a workspace.');
+      return;
+    }
+    try {
+      const diff = await getStagedDiffForFile(filePath, { repoPath: workspaceFolder.uri.fsPath });
+      if (!diff.trim()) {
+        vscode.window.showInformationMessage('Alloy: No staged changes found.');
+        return;
+      }
+      await reviewDiffAndShowResults(editor.document, diff, context, statusBarItem);
+    } catch (err) {
+      vscode.window.showErrorMessage(`Alloy: Staged review failed: ${(err as Error).message}`);
+    }
+  });
+
+  const reviewStagedAll = vscode.commands.registerCommand('alloy.reviewAllStagedFiles', async () => {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+      vscode.window.showWarningMessage('Alloy: No workspace folder open.');
+      return;
+    }
+    const repoPath = workspaceFolders[0].uri.fsPath;
+    const stagedFiles = await getStagedFiles({ repoPath });
+    const supportedFiles = stagedFiles.filter(f => isSupportedSourceFile(f) && !shouldSkipPath(f, repoPath));
+    if (supportedFiles.length === 0) {
+      vscode.window.showInformationMessage('Alloy: No staged changes found.');
+      return;
+    }
+    vscode.window.showInformationMessage(`Alloy: Found ${supportedFiles.length} staged file(s) to review.`);
+    for (const file of supportedFiles) {
+      try {
+        const doc = await vscode.workspace.openTextDocument(file);
+        const diff = await getStagedDiffForFile(file, { repoPath });
+        if (diff.trim()) {
+          await reviewDiffAndShowResults(doc, diff, context, statusBarItem);
+        }
+      } catch (err) {
+        outputChannel.appendLine(`[Alloy] Staged review failed for ${file}: ${(err as Error).message}`);
+      }
+    }
   });
 
   const clear = vscode.commands.registerCommand('alloy.clearFindings', () => {
@@ -181,7 +218,146 @@ function registerCommands(
     vscode.window.showInformationMessage('Alloy: Findings cleared.');
   });
 
-  context.subscriptions.push(openMenu, setup, showIssue, copySuggestion, reviewCurrent, legacyReviewCurrent, reviewAll, clear);
+  const dismissFinding = vscode.commands.registerCommand('alloy.dismissFinding', async (uri?: vscode.Uri, findingId?: string) => {
+    if (!uri || !findingId) return;
+    findingsTree.dismissFinding(uri, findingId);
+    const remaining = findingsTree.getAllFindings().filter(f => f.uri.toString() === uri.toString());
+    diagnosticCollection.set(uri, remaining.map(f => {
+      const line = f.finding.line - 1;
+      return new vscode.Diagnostic(new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER), f.finding.message, vscode.DiagnosticSeverity.Warning);
+    }));
+  });
+
+  const dismissAllInFile = vscode.commands.registerCommand('alloy.dismissAllInFile', async (uri?: vscode.Uri) => {
+    if (!uri) return;
+    findingsTree.dismissAllInFile(uri);
+    diagnosticCollection.delete(uri);
+    commentController.clearComments(uri);
+    clearFindings(uri);
+  });
+
+  const copyFinding = vscode.commands.registerCommand('alloy.copyFinding', async (_uri?: vscode.Uri, finding?: ReviewFinding) => {
+    if (!finding) return;
+    const text = `[${finding.severity.toUpperCase()}] ${finding.message}\nSuggestion: ${finding.suggestion}${finding.rationale ? `\nRationale: ${finding.rationale}` : ''}`;
+    await vscode.env.clipboard.writeText(text);
+    vscode.window.showInformationMessage('Alloy: Finding copied.');
+  });
+
+  const groupByFile = vscode.commands.registerCommand('alloy.groupByFile', () => {
+    findingsTree.setGroupBy('file');
+  });
+
+  const groupBySeverity = vscode.commands.registerCommand('alloy.groupBySeverity', () => {
+    findingsTree.setGroupBy('severity');
+  });
+
+  const groupByCategory = vscode.commands.registerCommand('alloy.groupByCategory', () => {
+    findingsTree.setGroupBy('category');
+  });
+
+  const filterFindings = vscode.commands.registerCommand('alloy.filterFindings', async () => {
+    const config = getAlloyConfig();
+    const items: vscode.QuickPickItem[] = [
+      { label: '$(error) Errors', picked: config.enabledSeverities.includes('error'), description: 'Show error-severity findings' },
+      { label: '$(warning) Warnings', picked: config.enabledSeverities.includes('warning'), description: 'Show warning-severity findings' },
+      { label: '$(info) Info', picked: config.enabledSeverities.includes('info'), description: 'Show info-severity findings' },
+      { label: '$(shield) Security', picked: config.enabledCategories.includes('security'), description: 'Security findings' },
+      { label: '$(lightbulb) Logic', picked: config.enabledCategories.includes('logic'), description: 'Logic findings' },
+      { label: '$(symbol-method) Quality', picked: config.enabledCategories.includes('quality'), description: 'Code quality findings' },
+      { label: '$(zap) Performance', picked: config.enabledCategories.includes('performance'), description: 'Performance findings' },
+      { label: '$(beaker) Test', picked: config.enabledCategories.includes('test'), description: 'Test-related findings' },
+    ];
+    const picked = await vscode.window.showQuickPick(items, {
+      canPickMany: true,
+      placeHolder: 'Toggle severity and category filters',
+    });
+    if (!picked) return;
+
+    const pickedLabels = new Set(picked.map(p => p.label));
+    const severities: string[] = [];
+    if (pickedLabels.has('$(error) Errors')) severities.push('error');
+    if (pickedLabels.has('$(warning) Warnings')) severities.push('warning');
+    if (pickedLabels.has('$(info) Info')) severities.push('info');
+
+    const categories: string[] = [];
+    if (pickedLabels.has('$(shield) Security')) categories.push('security');
+    if (pickedLabels.has('$(lightbulb) Logic')) categories.push('logic');
+    if (pickedLabels.has('$(symbol-method) Quality')) categories.push('quality');
+    if (pickedLabels.has('$(zap) Performance')) categories.push('performance');
+    if (pickedLabels.has('$(beaker) Test')) categories.push('test');
+
+    await vscode.workspace.getConfiguration('alloy').update('enabledSeverities', severities.length > 0 ? severities : config.enabledSeverities, vscode.ConfigurationTarget.Global);
+    await vscode.workspace.getConfiguration('alloy').update('enabledCategories', categories.length > 0 ? categories : config.enabledCategories, vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage('Alloy: Filters updated.');
+  });
+
+  const exportJSON = vscode.commands.registerCommand('alloy.exportFindingsJSON', async () => {
+    const findingsMap = getAllFindingsMap();
+    const json = exportFindingsJSON(findingsMap);
+    const doc = await vscode.workspace.openTextDocument({ content: json, language: 'json' });
+    await vscode.window.showTextDocument(doc);
+    vscode.window.showInformationMessage('Alloy: Findings exported as JSON.');
+  });
+
+  const exportMarkdown = vscode.commands.registerCommand('alloy.exportFindingsMarkdown', async () => {
+    const findingsMap = getAllFindingsMap();
+    const md = exportFindingsMarkdown(findingsMap);
+    const doc = await vscode.workspace.openTextDocument({ content: md, language: 'markdown' });
+    await vscode.window.showTextDocument(doc);
+    vscode.window.showInformationMessage('Alloy: Findings exported as Markdown.');
+  });
+
+  const generatePR = vscode.commands.registerCommand('alloy.generatePRDescription', async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      vscode.window.showWarningMessage('Alloy: Open a workspace folder first.');
+      return;
+    }
+    const findings = getAllFindings();
+    if (findings.length === 0) {
+      vscode.window.showWarningMessage('Alloy: No findings available. Run a review first.');
+      return;
+    }
+    const changedFiles = await getChangedFiles({ repoPath: workspaceFolder.uri.fsPath });
+    try {
+      vscode.window.showInformationMessage('Alloy: Generating PR description...');
+      const description = await generatePRDescription(findings, changedFiles);
+      const doc = await vscode.workspace.openTextDocument({ content: description, language: 'markdown' });
+      await vscode.window.showTextDocument(doc);
+    } catch (err) {
+      vscode.window.showErrorMessage(`Alloy: PR description generation failed: ${(err as Error).message}`);
+    }
+  });
+
+  const openRulesFile = vscode.commands.registerCommand('alloy.openRulesFile', async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      vscode.window.showWarningMessage('Alloy: Open a workspace folder first.');
+      return;
+    }
+    const rulesPath = path.join(workspaceFolder.uri.fsPath, '.alloy', 'rules.json');
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.file(rulesPath));
+    } catch {
+      // File doesn't exist — create from template
+      const dirPath = path.join(workspaceFolder.uri.fsPath, '.alloy');
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirPath));
+      const template = JSON.stringify([{
+        id: 'example-rule',
+        name: 'Example Rule',
+        description: 'A custom review rule',
+        severity: 'warning',
+        category: 'quality',
+        pattern: 'console\\.log',
+        enabled: false,
+      }], null, 2);
+      await vscode.workspace.fs.writeFile(vscode.Uri.file(rulesPath), Buffer.from(template, 'utf-8'));
+    }
+    const doc = await vscode.workspace.openTextDocument(rulesPath);
+    await vscode.window.showTextDocument(doc);
+  });
+
+  context.subscriptions.push(openMenu, setup, showIssue, copySuggestion, reviewCurrent, reviewAll, clear, reviewStagedCurrent, reviewStagedAll, dismissFinding, dismissAllInFile, copyFinding, groupByFile, groupBySeverity, groupByCategory, filterFindings, exportJSON, exportMarkdown, generatePR, openRulesFile);
 }
 
 function registerAutoReview(context: vscode.ExtensionContext) {
@@ -229,6 +405,10 @@ async function reviewAllChangedFiles(context: vscode.ExtensionContext, statusBar
     return;
   }
 
+  const CONCURRENCY_LIMIT = 3;
+  const limiter = new RateLimiter(CONCURRENCY_LIMIT);
+  let completed = 0;
+
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
@@ -236,12 +416,17 @@ async function reviewAllChangedFiles(context: vscode.ExtensionContext, statusBar
       cancellable: true,
     },
     async (progress, token) => {
-      for (let i = 0; i < files.length; i++) {
-        if (token.isCancellationRequested) break;
-        progress.report({ message: path.basename(files[i]), increment: 100 / files.length });
-        const doc = await vscode.workspace.openTextDocument(files[i]);
+      const reviewOne = async (filePath: string) => {
+        if (token.isCancellationRequested) return;
+        progress.report({ message: path.basename(filePath) });
+        const doc = await vscode.workspace.openTextDocument(filePath);
         await reviewDocument(context, doc, statusBarItem, undefined, false, false, token);
-      }
+        completed++;
+        progress.report({ message: `${completed}/${files.length}` });
+      };
+
+      const workers = files.map(file => limiter.run(() => reviewOne(file)));
+      await Promise.allSettled(workers);
     },
   );
 }
@@ -355,10 +540,65 @@ async function reviewDocument(
         outputChannel.appendLine(`[Alloy] Error: ${message}`);
         if (!isAutoTrigger) vscode.window.showErrorMessage(`Alloy review failed: ${message}`);
       } finally {
-        statusBarItem.hide();
+        updateStatusBar(statusBarItem);
       }
     },
   );
+}
+
+async function reviewDiffAndShowResults(
+  document: vscode.TextDocument,
+  rawDiff: string,
+  context: vscode.ExtensionContext,
+  statusBarItem: vscode.StatusBarItem,
+) {
+  const config = getAlloyConfig();
+  const filePath = document.uri.fsPath;
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+  if (!workspaceFolder) return;
+
+  await ensureProviderReady(context, config.provider);
+
+  statusBarItem.text = '$(sync~spin) Alloy Reviewing...';
+  statusBarItem.show();
+
+  try {
+    outputChannel.appendLine(`[Alloy] Reviewing staged: ${filePath}`);
+    const parsedDiff = parseUnifiedDiff(rawDiff, filePath);
+    const modifiedLines = parsedDiff.addedLines.map((line) => line.lineNumber);
+    await reviewDiff({
+      diff: rawDiff,
+      enumeratedDiff: buildEnumeratedDiff(parsedDiff),
+      sourceCode: document.getText(),
+      filePath,
+      modifiedLines,
+      config,
+      uri: document.uri,
+      diagnosticCollection,
+      commentController,
+    });
+
+    const diagnostics = diagnosticCollection.get(document.uri) ?? [];
+    const storedFindings = getFindings(document.uri);
+    const fallbackFindings = diagnostics.map((diagnostic): ReviewFinding => ({
+      line: diagnostic.range.start.line + 1,
+      severity: diagnostic.severity === vscode.DiagnosticSeverity.Error ? 'error' : diagnostic.severity === vscode.DiagnosticSeverity.Information ? 'info' : 'warning',
+      message: diagnostic.message,
+      suggestion: diagnostic.message,
+    }));
+    const findings = storedFindings.length > 0 ? storedFindings : fallbackFindings;
+    findingsTree.setFindings(document.uri, findings);
+    outputChannel.appendLine(`[Alloy] Review complete: ${diagnostics.length} finding(s)`);
+    vscode.window.showInformationMessage(diagnostics.length > 0
+      ? `Alloy: ${diagnostics.length} issue(s) found.`
+      : 'Alloy: No issues found.');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    outputChannel.appendLine(`[Alloy] Error: ${message}`);
+    vscode.window.showErrorMessage(`Alloy review failed: ${message}`);
+  } finally {
+    updateStatusBar(statusBarItem);
+  }
 }
 
 async function openHeadDiff(
@@ -379,37 +619,34 @@ async function openHeadDiff(
   }
 }
 
+function updateStatusBar(statusBarItem: vscode.StatusBarItem): void {
+  const allFindings = getAllFindings();
+  const errors = allFindings.filter(f => f.severity === 'error').length;
+  const warnings = allFindings.filter(f => f.severity === 'warning').length;
+  const infos = allFindings.filter(f => f.severity === 'info').length;
+  const total = errors + warnings + infos;
+
+  if (total === 0) {
+    statusBarItem.text = '$(check) Alloy';
+    statusBarItem.backgroundColor = undefined;
+  } else {
+    const parts: string[] = [];
+    if (errors > 0) parts.push(`${errors}E`);
+    if (warnings > 0) parts.push(`${warnings}W`);
+    if (infos > 0) parts.push(`${infos}I`);
+    statusBarItem.text = `$(warning) Alloy: ${parts.join(' ')}`;
+    statusBarItem.backgroundColor = errors > 0
+      ? new vscode.ThemeColor('statusBarItem.warningBackground')
+      : undefined;
+  }
+  statusBarItem.show();
+}
+
 function clearDocumentFindings(uri: vscode.Uri): void {
   diagnosticCollection.set(uri, []);
   commentController.clearComments(uri);
   clearFindings(uri);
   findingsTree.clear(uri);
-}
-
-async function chooseProvider(): Promise<LLMProviderId | undefined> {
-  const picked = await vscode.window.showQuickPick(
-    [
-      { label: 'Groq', provider: 'groq' as const },
-      { label: 'Gemini', provider: 'gemini' as const },
-      { label: 'OpenAI-compatible', provider: 'openaiCompatible' as const },
-      { label: 'Ollama', provider: 'ollama' as const },
-    ],
-    { placeHolder: 'Choose the model provider Alloy should use' },
-  );
-  return picked?.provider;
-}
-
-function providerLabel(provider: LLMProviderId): string {
-  switch (provider) {
-    case 'openaiCompatible':
-      return 'OpenAI-compatible provider';
-    case 'ollama':
-      return 'Ollama';
-    case 'gemini':
-      return 'Gemini';
-    case 'groq':
-      return 'Groq';
-  }
 }
 
 export function deactivate() {

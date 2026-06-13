@@ -139,7 +139,20 @@ function getCommentSyntax(languageId: string): { prefix: string; suffix: string 
     case 'html':
     case 'xml':
     case 'vue':
+    case 'svelte':
       return { prefix: '<!-- ', suffix: ' -->' };
+    case 'php':
+      return { prefix: '// ', suffix: '' };
+    case 'rust':
+    case 'go':
+    case 'java':
+    case 'c':
+    case 'cpp':
+    case 'csharp':
+    case 'swift':
+    case 'kotlin':
+    case 'typescript':
+    case 'javascript':
     default:
       return { prefix: '// ', suffix: '' };
   }

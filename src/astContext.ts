@@ -48,6 +48,7 @@ export function detectLanguage(filePath: string): string | null {
   if (filePath.endsWith('.js') || filePath.endsWith('.mjs') || filePath.endsWith('.cjs')) {
     return 'javascript';
   }
+  // Languages without tree-sitter WASM grammars installed get diff-only review (no AST context)
   return null;
 }
 
@@ -146,6 +147,8 @@ function findFunctionsInTree(
   }
 }
 
+const PARSE_TIMEOUT_MS = 5000;
+
 export async function getFunctionContext(
   sourceCode: string,
   modifiedLines: number[],
@@ -156,25 +159,36 @@ export async function getFunctionContext(
     return [];
   }
 
-  const lang = await getLanguage(language);
-  if (!cachedParser) {
-    cachedParser = new Parser();
-  }
-  cachedParser.setLanguage(lang);
+  const parsePromise = (async () => {
+    const lang = await getLanguage(language);
+    if (!cachedParser) {
+      cachedParser = new Parser();
+    }
+    cachedParser.setLanguage(lang);
 
-  const tree = cachedParser.parse(sourceCode);
-  if (!tree) {
-    return [];
-  }
+    const tree = cachedParser.parse(sourceCode);
+    if (!tree) {
+      return [];
+    }
 
-  const root = tree.rootNode;
-  const modifiedSet = new Set(modifiedLines);
-  const contexts: FunctionContext[] = [];
+    const root = tree.rootNode;
+    const modifiedSet = new Set(modifiedLines);
+    const contexts: FunctionContext[] = [];
 
-  findFunctionsInTree(root, modifiedSet, sourceCode, contexts);
+    findFunctionsInTree(root, modifiedSet, sourceCode, contexts);
 
-  tree.delete();
-  return contexts;
+    tree.delete();
+    return contexts;
+  })();
+
+  const timeoutPromise = new Promise<FunctionContext[]>((resolve) => {
+    setTimeout(() => {
+      console.warn(`[Alloy] Tree-sitter parse timed out for ${filePath}`);
+      resolve([]);
+    }, PARSE_TIMEOUT_MS);
+  });
+
+  return Promise.race([parsePromise, timeoutPromise]);
 }
 
 export function formatFunctionContext(contexts: FunctionContext[]): string {

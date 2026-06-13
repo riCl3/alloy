@@ -1,25 +1,25 @@
 import { VectorStore, IndexedFunction, type StoreSnapshot } from './vectorStore';
 import { detectLanguage, getFunctionContext } from './astContext';
-import * as fs from 'fs';
+import { SUPPORTED_EXTENSIONS } from './ignore';
+import { promises as fsp } from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 
 export interface IndexerOptions {
   geminiApiKey?: string;
   embeddingModel?: string;
 }
 
-const SUPPORTED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs']);
-
-function walkDirectory(dir: string, maxDepth = 10, depth = 0): string[] {
+async function walkDirectory(dir: string, maxDepth = 10, depth = 0): Promise<string[]> {
   if (depth > maxDepth) return [];
   const results: string[] = [];
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === '__pycache__') continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        results.push(...walkDirectory(fullPath, maxDepth, depth + 1));
+        results.push(...await walkDirectory(fullPath, maxDepth, depth + 1));
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name);
         if (SUPPORTED_EXTENSIONS.has(ext)) {
@@ -65,11 +65,14 @@ async function extractAllFunctions(filePath: string, sourceCode: string): Promis
 
 export async function getEmbedding(text: string, apiKey: string, model?: string): Promise<number[]> {
   const embedModel = model ?? 'text-embedding-004';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${embedModel}:embedContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${embedModel}:embedContent`;
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
     body: JSON.stringify({
       model: `models/${embedModel}`,
       content: { parts: [{ text }] },
@@ -131,32 +134,36 @@ export class RepoStyleIndexer {
     return this.cacheDir ? path.join(this.cacheDir, CACHE_FILENAME) : null;
   }
 
-  private loadFromCache(): boolean {
+  private async loadFromCache(): Promise<boolean> {
     const filePath = this.cachePath();
     if (!filePath) return false;
     try {
-      if (!fs.existsSync(filePath)) return false;
-      const raw = fs.readFileSync(filePath, 'utf-8');
-      const data = JSON.parse(raw) as StoreSnapshot;
-      this.store.load(data);
+      await fsp.access(filePath);
+      const raw = await fsp.readFile(filePath, 'utf-8');
+      const data = JSON.parse(raw) as { snapshot: StoreSnapshot; checksum: string };
+      const expectedChecksum = createHash('sha256').update(JSON.stringify(data.snapshot)).digest('hex');
+      if (data.checksum !== expectedChecksum) {
+        console.warn('[Alloy Indexer] Cache integrity check failed, rebuilding index');
+        return false;
+      }
+      this.store.load(data.snapshot);
       console.log(`[Alloy Indexer] Loaded ${this.store.size} indexed functions from cache`);
       return true;
-    } catch (err) {
-      console.warn(`[Alloy Indexer] Failed to load cache: ${(err as Error).message}`);
+    } catch {
       return false;
     }
   }
 
-  private saveToCache(): void {
+  private async saveToCache(): Promise<void> {
     const filePath = this.cachePath();
     if (!filePath) return;
     try {
       const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      const data = this.store.snapshot();
-      fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
+      await fsp.mkdir(dir, { recursive: true });
+      const snapshot = this.store.snapshot();
+      const checksum = createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+      const data = { snapshot, checksum };
+      await fsp.writeFile(filePath, JSON.stringify(data), 'utf-8');
       console.log(`[Alloy Indexer] Saved ${this.store.size} indexed functions to cache`);
     } catch (err) {
       console.warn(`[Alloy Indexer] Failed to save cache: ${(err as Error).message}`);
@@ -166,14 +173,14 @@ export class RepoStyleIndexer {
   async initialize(workspacePath: string, cacheDir?: string): Promise<void> {
     this.cacheDir = cacheDir ?? null;
 
-    const loaded = this.loadFromCache();
+    const loaded = await this.loadFromCache();
 
-    const files = walkDirectory(workspacePath);
+    const files = await walkDirectory(workspacePath);
     const filesToIndex: string[] = [];
 
     for (const filePath of files) {
       try {
-        const stat = fs.statSync(filePath);
+        const stat = await fsp.stat(filePath);
         const mtime = stat.mtimeMs;
         if (loaded && !this.store.hasFileChanged(filePath, mtime)) {
           continue;
@@ -197,7 +204,7 @@ export class RepoStyleIndexer {
       try {
         // Remove stale entries for this file before re-indexing
         this.store.removeFile(filePath);
-        const sourceCode = fs.readFileSync(filePath, 'utf-8');
+        const sourceCode = await fsp.readFile(filePath, 'utf-8');
         const functions = await extractAllFunctions(filePath, sourceCode);
         allFunctions.push(...functions);
       } catch {
@@ -224,7 +231,7 @@ export class RepoStyleIndexer {
       }
     }
 
-    this.saveToCache();
+    await this.saveToCache();
   }
 
   async querySimilar(sourceCode: string, modifiedLines: number[], filePath: string, k = 3): Promise<string> {

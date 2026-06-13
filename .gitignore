@@ -1,8 +1,38 @@
+# Dependencies
 node_modules/
+
+# Build output
 out/
 *.vsix
+
+# Test coverage
 coverage/
 .vscode-test/
-.opencode
-.openclaude
-.vscode
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.idea/
+*.swp
+*.swo
+*~
+
+# AI tool configs (local only)
+.opencode/
+.openclaude/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Cache
+.cache/
+*.tsbuildinfo

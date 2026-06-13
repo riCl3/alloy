@@ -35,6 +35,9 @@ jest.mock('../findingsStore', () => ({
   storeFindings: jest.fn(),
   getFindings: jest.fn().mockReturnValue([]),
   clearFindings: jest.fn(),
+  getAllFindings: jest.fn().mockReturnValue([]),
+  getAllFindingsMap: jest.fn().mockReturnValue(new Map()),
+  onDidChangeFindings: jest.fn().mockReturnValue({ dispose: jest.fn() }),
 }));
 
 jest.mock('../codeActionProvider', () => {
@@ -107,16 +110,12 @@ describe('extension activate', () => {
     (vscode.window.showWarningMessage as jest.Mock).mockReset();
   });
 
-  it('registers the alloy.reviewCurrentFile command and legacy alias', async () => {
+  it('registers the alloy.reviewCurrentFile command', async () => {
     const { activate } = await import('../extension');
     activate(mockContext);
 
     expect(vscode.commands.registerCommand).toHaveBeenCalledWith(
       'alloy.reviewCurrentFile',
-      expect.any(Function),
-    );
-    expect(vscode.commands.registerCommand).toHaveBeenCalledWith(
-      'reviewbot.reviewCurrentFile',
       expect.any(Function),
     );
   });
