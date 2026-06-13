@@ -1,4 +1,4 @@
-import * as fs from 'fs';
+import { promises as fsp } from 'fs';
 import * as path from 'path';
 import { FindingCategory, ReviewFinding, Severity } from './types';
 
@@ -13,13 +13,38 @@ export interface CustomRule {
   enabled: boolean;
 }
 
-export function loadCustomRules(workspacePath: string): CustomRule[] {
+const MAX_REGEX_COMPLEXITY = 200;
+
+function isRegexSafe(pattern: string): boolean {
+  let depth = 0;
+  let groups = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '(' || ch === '[') {
+      depth++;
+      if (ch === '(') groups++;
+    } else if (ch === ')' || ch === ']') {
+      depth--;
+    }
+    if (depth > MAX_REGEX_COMPLEXITY || groups > 20) return false;
+    if (ch === '*' || ch === '+') {
+      const prev = pattern[i - 1];
+      if (prev === '(' || prev === '|') return false;
+    }
+  }
+  return depth === 0;
+}
+
+export async function loadCustomRules(workspacePath: string): Promise<CustomRule[]> {
   const rulesPath = path.join(workspacePath, '.alloy', 'rules.json');
   try {
-    const raw = fs.readFileSync(rulesPath, 'utf-8');
+    const raw = await fsp.readFile(rulesPath, 'utf-8');
     const data = JSON.parse(raw);
     if (!Array.isArray(data)) return [];
-    return data.filter((r: any) => r && r.id && r.name && r.enabled !== false);
+    return data.filter((r: unknown) => {
+      const rule = r as Record<string, unknown>;
+      return rule && rule.id && rule.name && rule.enabled !== false;
+    });
   } catch {
     return [];
   }
@@ -41,7 +66,8 @@ export function applyPatternRules(rules: CustomRule[], diff: string): ReviewFind
 
   for (const rule of patternRules) {
     try {
-      const regex = new RegExp(rule.pattern!, 'i');
+      if (!rule.pattern || !isRegexSafe(rule.pattern)) continue;
+      const regex = new RegExp(rule.pattern, 'i');
       for (let i = 0; i < diffLines.length; i++) {
         const line = diffLines[i];
         if (!line.startsWith('+') || line.startsWith('+++')) continue;

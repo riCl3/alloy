@@ -183,11 +183,15 @@ export async function saveProviderCredentials(
   if (provider !== 'ollama' && apiKey) {
     await context.secrets.store(KEY_IDS[provider], apiKey);
     cachedKeys.set(provider, apiKey);
+  } else if (provider !== 'ollama') {
+    cachedKeys.delete(provider);
   }
   const baseUrlId = BASE_URL_IDS[provider];
   if (baseUrl && baseUrlId) {
     await context.secrets.store(baseUrlId, baseUrl);
     cachedBaseUrls.set(provider, baseUrl);
+  } else if (baseUrlId) {
+    cachedBaseUrls.delete(provider);
   }
 }
 

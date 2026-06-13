@@ -1,14 +1,50 @@
 import * as vscode from 'vscode';
+import { randomBytes } from 'crypto';
 import { LLMProviderId } from '../types';
 import { getAlloyConfig, providerDefaultModel } from '../config';
 import { validateProvider } from '../llmRouter';
 import { getProviderStatus, saveProviderCredentials } from '../secretManager';
+
+const VALID_PROVIDER_IDS: ReadonlySet<string> = new Set<LLMProviderId>(['groq', 'gemini', 'openaiCompatible', 'ollama']);
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeJsString(str: string): string {
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
+function isValidHttpUrl(str: string): boolean {
+  try {
+    const url = new URL(str);
+    return url.protocol === 'https:' || (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'));
+  } catch {
+    return false;
+  }
+}
+
+function isValidProviderId(id: unknown): id is LLMProviderId {
+  return typeof id === 'string' && VALID_PROVIDER_IDS.has(id);
+}
+
+function hasValidProvider(payload: unknown): payload is { provider: LLMProviderId } {
+  const p = payload as Record<string, unknown> | undefined;
+  return !!p && isValidProviderId(p.provider);
+}
 
 export class SetupPanel {
   private static currentPanel: SetupPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private readonly context: vscode.ExtensionContext;
   private disposables: vscode.Disposable[] = [];
+  private lastMessageTime = 0;
+  private static readonly RATE_LIMIT_MS = 500;
 
   private constructor(context: vscode.ExtensionContext, column: vscode.ViewColumn) {
     this.context = context;
@@ -46,36 +82,63 @@ export class SetupPanel {
   private async render(): Promise<void> {
     const config = getAlloyConfig();
     const status = await getProviderStatus(this.context);
-    this.panel.webview.html = this.getHtml(config.provider, config.model, config.reviewMode, status);
+    const nonce = randomBytes(16).toString('base64');
+    this.panel.webview.html = this.getHtml(config.provider, config.model, config.reviewMode, status, nonce);
   }
 
-  private async handleMessage(message: { type: string; payload?: any }): Promise<void> {
+  private async handleMessage(message: { type: string; payload?: unknown }): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastMessageTime < SetupPanel.RATE_LIMIT_MS) {
+      console.warn('[Alloy SetupPanel] Rate limited message');
+      return;
+    }
+    this.lastMessageTime = now;
+
     switch (message.type) {
       case 'save': {
-        const { provider, apiKey, baseUrl, model } = message.payload;
+        if (!hasValidProvider(message.payload)) {
+          console.warn('[Alloy SetupPanel] Invalid save payload');
+          return;
+        }
+        const { provider } = message.payload;
+        const p = message.payload as Record<string, unknown>;
+        const apiKey = typeof p.apiKey === 'string' ? p.apiKey : '';
+        const rawBaseUrl = typeof p.baseUrl === 'string' ? p.baseUrl : '';
+        const model = typeof p.model === 'string' ? p.model : '';
+
+        if (rawBaseUrl && !isValidHttpUrl(rawBaseUrl)) {
+          this.panel.webview.postMessage({ type: 'error', message: 'Invalid base URL. Only HTTPS or localhost HTTP URLs are allowed.' });
+          return;
+        }
+
+        const baseUrl = rawBaseUrl;
         try {
-          await saveProviderCredentials(this.context, provider, apiKey || '', baseUrl || '');
+          await saveProviderCredentials(this.context, provider, apiKey, baseUrl);
           await vscode.workspace.getConfiguration('alloy').update('provider', provider, vscode.ConfigurationTarget.Global);
           if (model) {
             await vscode.workspace.getConfiguration('alloy').update('model', model, vscode.ConfigurationTarget.Global);
           }
           this.panel.webview.postMessage({ type: 'saved', provider });
-          // Refresh status
           const status = await getProviderStatus(this.context);
           this.panel.webview.postMessage({ type: 'status', status });
-        } catch (err: any) {
-          this.panel.webview.postMessage({ type: 'error', message: err.message });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.panel.webview.postMessage({ type: 'error', message: msg });
         }
         break;
       }
       case 'test': {
-        const { provider } = message.payload;
+        if (!hasValidProvider(message.payload)) {
+          console.warn('[Alloy SetupPanel] Invalid test payload');
+          return;
+        }
         try {
           this.panel.webview.postMessage({ type: 'testing' });
-          await validateProvider(provider);
+          await validateProvider(message.payload.provider);
           this.panel.webview.postMessage({ type: 'testResult', success: true });
-        } catch (err: any) {
-          this.panel.webview.postMessage({ type: 'testResult', success: false, message: err.message });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.panel.webview.postMessage({ type: 'testResult', success: false, message: msg });
         }
         break;
       }
@@ -91,6 +154,7 @@ export class SetupPanel {
     currentModel: string,
     currentMode: string,
     status: Record<LLMProviderId, 'configured' | 'unconfigured'>,
+    nonce: string,
   ): string {
     const providers: { id: LLMProviderId; label: string; description: string; needsKey: boolean; defaultUrl?: string }[] = [
       { id: 'groq', label: 'Groq', description: 'Fast inference with Llama models', needsKey: true },
@@ -100,12 +164,12 @@ export class SetupPanel {
     ];
 
     const providerCards = providers.map(p => `
-      <div class="provider-card ${p.id === currentProvider ? 'selected' : ''}" data-provider="${p.id}">
+      <div class="provider-card ${p.id === currentProvider ? 'selected' : ''}" data-provider="${escapeHtml(p.id)}">
         <div class="provider-header">
-          <span class="provider-name">${p.label}</span>
-          <span class="status-badge ${status[p.id]}">${status[p.id] === 'configured' ? 'Configured' : 'Not configured'}</span>
+          <span class="provider-name">${escapeHtml(p.label)}</span>
+          <span class="status-badge ${escapeHtml(status[p.id])}">${status[p.id] === 'configured' ? 'Configured' : 'Not configured'}</span>
         </div>
-        <p class="provider-desc">${p.description}</p>
+        <p class="provider-desc">${escapeHtml(p.description)}</p>
       </div>
     `).join('');
 
@@ -114,7 +178,7 @@ export class SetupPanel {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Alloy Setup</title>
   <style>
     :root {
@@ -296,7 +360,7 @@ export class SetupPanel {
   <h1>Alloy Setup</h1>
   <p class="subtitle">Configure your AI code review provider</p>
   <p class="current-config">
-    Active: <strong>${currentProvider}</strong> | Model: <strong>${currentModel || providerDefaultModel(currentProvider)}</strong> | Mode: <strong>${currentMode}</strong>
+    Active: <strong>${escapeHtml(currentProvider)}</strong> | Model: <strong>${escapeHtml(currentModel || providerDefaultModel(currentProvider))}</strong> | Mode: <strong>${escapeHtml(currentMode)}</strong>
   </p>
 
   <div class="section-title">Provider</div>
@@ -327,9 +391,9 @@ export class SetupPanel {
     <div id="statusMsg"></div>
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    let selectedProvider = '${currentProvider}';
+    let selectedProvider = '${escapeJsString(currentProvider)}';
     const defaults = {
       groq: { keyPlaceholder: 'gsk_...', url: '' },
       gemini: { keyPlaceholder: 'AIza...', url: '' },
@@ -338,10 +402,10 @@ export class SetupPanel {
     };
 
     const models = {
-      groq: '${providerDefaultModel('groq')}',
-      gemini: '${providerDefaultModel('gemini')}',
-      openaiCompatible: '${providerDefaultModel('openaiCompatible')}',
-      ollama: '${providerDefaultModel('ollama')}',
+      groq: '${escapeJsString(providerDefaultModel('groq'))}',
+      gemini: '${escapeJsString(providerDefaultModel('gemini'))}',
+      openaiCompatible: '${escapeJsString(providerDefaultModel('openaiCompatible'))}',
+      ollama: '${escapeJsString(providerDefaultModel('ollama'))}',
     };
 
     function selectProvider(id) {
@@ -399,7 +463,11 @@ export class SetupPanel {
         el.textContent = 'Configuration saved for ' + msg.provider;
       } else if (msg.type === 'testing') {
         el.className = 'status-msg testing';
-        el.innerHTML = '<span class="spinner"></span> Testing connection...';
+        el.textContent = '';
+        const spinner = document.createElement('span');
+        spinner.className = 'spinner';
+        el.appendChild(spinner);
+        el.append(' Testing connection...');
       } else if (msg.type === 'testResult') {
         if (msg.success) {
           el.className = 'status-msg success';

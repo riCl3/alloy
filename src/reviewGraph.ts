@@ -219,7 +219,6 @@ function extractFromCodeLikeText(text: string): string {
 
 function sanitizeMessage(text: string, maxLen = 80): string {
   if (!text) return '';
-  // Strip markdown code fences and inline backticks
   let cleaned = text
     .replace(/```[\s\S]*?```/g, '')
     .replace(/`([^`]+)`/g, '$1')
@@ -232,6 +231,12 @@ function sanitizeMessage(text: string, maxLen = 80): string {
     if (!extracted) return '';
     cleaned = extracted;
   }
+  cleaned = cleaned
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+\s*=/gi, '')
+    .replace(/data:text\/html/gi, '');
   if (cleaned.length > maxLen) {
     return cleaned.slice(0, maxLen - 3) + '...';
   }
