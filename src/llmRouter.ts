@@ -191,10 +191,13 @@ class GeminiProvider implements LLMProvider {
     if (options.systemPrompt) contents.push({ parts: [{ text: options.systemPrompt }] });
     contents.push({ parts: [{ text: options.prompt }] });
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const response = await fetchWithTimeout(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
       body: JSON.stringify({
         contents,
         generationConfig: {

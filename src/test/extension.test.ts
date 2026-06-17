@@ -31,20 +31,12 @@ jest.mock('../diffParser', () => ({
   buildEnumeratedDiff: mockBuildEnumeratedDiff,
 }));
 
-jest.mock('../findingsStore', () => ({
-  storeFindings: jest.fn(),
-  getFindings: jest.fn().mockReturnValue([]),
-  clearFindings: jest.fn(),
-  getAllFindings: jest.fn().mockReturnValue([]),
-  getAllFindingsMap: jest.fn().mockReturnValue(new Map()),
-  onDidChangeFindings: jest.fn().mockReturnValue({ dispose: jest.fn() }),
-}));
-
 jest.mock('../codeActionProvider', () => {
   const providedCodeActionKinds = [{ value: 'quickfix' }];
   return {
     AlloyCodeActionProvider: class {
       static providedCodeActionKinds = providedCodeActionKinds;
+      constructor(_findingsTree: unknown) {}
     },
   };
 });
@@ -169,6 +161,7 @@ describe('extension activate', () => {
       uri: doc.uri,
       diagnosticCollection: expect.any(Object),
       commentController: expect.any(Object),
+      findingsTree: expect.any(Object),
       config: expect.any(Object),
     });
     expect(mockParseUnifiedDiff).toHaveBeenCalledWith('mock-diff-content', '/repo/src/test.ts');
@@ -255,7 +248,7 @@ describe('extension activate', () => {
 
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
         'alloy.reviewCurrentFile',
-        { autoTrigger: true },
+        expect.objectContaining({ autoTrigger: true }),
       );
 
       jest.useRealTimers();

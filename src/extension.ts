@@ -9,7 +9,6 @@ import { AlloyCommentController } from './commentController';
 import { AlloyFindingsTree } from './findingsTree';
 import { getAlloyConfig } from './config';
 import { ReviewFinding } from './types';
-import { clearFindings, getFindings, getAllFindings, getAllFindingsMap, onDidChangeFindings } from './findingsStore';
 import { clearReviewCache } from './reviewCache';
 import { isSupportedSourceFile, shouldSkipPath } from './ignore';
 import { SetupPanel } from './panels/SetupPanel';
@@ -38,14 +37,14 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem.command = 'alloyFindings.focus';
   updateStatusBar(statusBarItem);
   context.subscriptions.push(statusBarItem);
-  context.subscriptions.push(onDidChangeFindings(() => updateStatusBar(statusBarItem)));
+  context.subscriptions.push(findingsTree.onDidChangeFindings(() => updateStatusBar(statusBarItem)));
 
   const headProvider = createHeadProvider();
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(HEAD_SCHEME, headProvider));
 
   context.subscriptions.push(vscode.languages.registerCodeActionsProvider(
     { scheme: 'file' },
-    new AlloyCodeActionProvider(),
+    new AlloyCodeActionProvider(findingsTree),
     { providedCodeActionKinds: AlloyCodeActionProvider.providedCodeActionKinds },
   ));
 
@@ -147,8 +146,8 @@ function registerCommands(
     vscode.window.showInformationMessage('Alloy: Suggestion copied.');
   });
 
-  const reviewCurrent = vscode.commands.registerCommand('alloy.reviewCurrentFile', async (args?: { autoTrigger?: boolean }) => {
-    await reviewActiveEditor(context, statusBarItem, headProvider, args?.autoTrigger === true);
+  const reviewCurrent = vscode.commands.registerCommand('alloy.reviewCurrentFile', async (args?: { autoTrigger?: boolean; token?: vscode.CancellationToken }) => {
+    await reviewActiveEditor(context, statusBarItem, headProvider, args?.autoTrigger === true, args?.token);
   });
 
   const reviewAll = vscode.commands.registerCommand('alloy.reviewAllChangedFiles', async () => {
@@ -187,23 +186,46 @@ function registerCommands(
     }
     const repoPath = workspaceFolders[0].uri.fsPath;
     const stagedFiles = await getStagedFiles({ repoPath });
-    const supportedFiles = stagedFiles.filter(f => isSupportedSourceFile(f) && !shouldSkipPath(f, repoPath));
+    const skipResults = await Promise.all(
+      stagedFiles.map(async f => isSupportedSourceFile(f) && !(await shouldSkipPath(f, repoPath)))
+    );
+    const supportedFiles = stagedFiles.filter((_, i) => skipResults[i]);
     if (supportedFiles.length === 0) {
       vscode.window.showInformationMessage('Alloy: No staged changes found.');
       return;
     }
-    vscode.window.showInformationMessage(`Alloy: Found ${supportedFiles.length} staged file(s) to review.`);
-    for (const file of supportedFiles) {
-      try {
-        const doc = await vscode.workspace.openTextDocument(file);
-        const diff = await getStagedDiffForFile(file, { repoPath });
-        if (diff.trim()) {
-          await reviewDiffAndShowResults(doc, diff, context, statusBarItem);
-        }
-      } catch (err) {
-        outputChannel.appendLine(`[Alloy] Staged review failed for ${file}: ${(err as Error).message}`);
-      }
-    }
+
+    const CONCURRENCY_LIMIT = 3;
+    const limiter = new RateLimiter(CONCURRENCY_LIMIT);
+    let completed = 0;
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Alloy: Reviewing ${supportedFiles.length} staged file(s)...`,
+        cancellable: true,
+      },
+      async (progress, token) => {
+        const reviewOne = async (file: string) => {
+          if (token.isCancellationRequested) return;
+          progress.report({ message: path.basename(file) });
+          try {
+            const doc = await vscode.workspace.openTextDocument(file);
+            const diff = await getStagedDiffForFile(file, { repoPath });
+            if (diff.trim()) {
+              await reviewDiffAndShowResults(doc, diff, context, statusBarItem);
+            }
+          } catch (err) {
+            outputChannel.appendLine(`[Alloy] Staged review failed for ${file}: ${(err as Error).message}`);
+          }
+          completed++;
+          progress.report({ message: `${completed}/${supportedFiles.length}` });
+        };
+
+        const workers = supportedFiles.map(file => limiter.run(() => reviewOne(file)));
+        await Promise.allSettled(workers);
+      },
+    );
   });
 
   const clear = vscode.commands.registerCommand('alloy.clearFindings', () => {
@@ -213,7 +235,7 @@ function registerCommands(
     const editor = vscode.window.activeTextEditor;
     if (editor) {
       commentController.clearComments(editor.document.uri);
-      clearFindings(editor.document.uri);
+      findingsTree.clearFindings(editor.document.uri);
     }
     vscode.window.showInformationMessage('Alloy: Findings cleared.');
   });
@@ -233,7 +255,7 @@ function registerCommands(
     findingsTree.dismissAllInFile(uri);
     diagnosticCollection.delete(uri);
     commentController.clearComments(uri);
-    clearFindings(uri);
+    findingsTree.clearFindings(uri);
   });
 
   const copyFinding = vscode.commands.registerCommand('alloy.copyFinding', async (_uri?: vscode.Uri, finding?: ReviewFinding) => {
@@ -292,7 +314,7 @@ function registerCommands(
   });
 
   const exportJSON = vscode.commands.registerCommand('alloy.exportFindingsJSON', async () => {
-    const findingsMap = getAllFindingsMap();
+    const findingsMap = findingsTree.getAllFindingsMap();
     const json = exportFindingsJSON(findingsMap);
     const doc = await vscode.workspace.openTextDocument({ content: json, language: 'json' });
     await vscode.window.showTextDocument(doc);
@@ -300,7 +322,7 @@ function registerCommands(
   });
 
   const exportMarkdown = vscode.commands.registerCommand('alloy.exportFindingsMarkdown', async () => {
-    const findingsMap = getAllFindingsMap();
+    const findingsMap = findingsTree.getAllFindingsMap();
     const md = exportFindingsMarkdown(findingsMap);
     const doc = await vscode.workspace.openTextDocument({ content: md, language: 'markdown' });
     await vscode.window.showTextDocument(doc);
@@ -313,7 +335,7 @@ function registerCommands(
       vscode.window.showWarningMessage('Alloy: Open a workspace folder first.');
       return;
     }
-    const findings = getAllFindings();
+    const findings = findingsTree.getAllFindings().map(f => f.finding);
     if (findings.length === 0) {
       vscode.window.showWarningMessage('Alloy: No findings available. Run a review first.');
       return;
@@ -362,6 +384,8 @@ function registerCommands(
 
 function registerAutoReview(context: vscode.ExtensionContext) {
   let debounceTimer: NodeJS.Timeout | undefined;
+  let activeReview: vscode.CancellationTokenSource | undefined;
+
   context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((doc: vscode.TextDocument) => {
     if (doc.uri.scheme !== 'file') return;
     if (!vscode.workspace.getWorkspaceFolder(doc.uri)) return;
@@ -369,9 +393,24 @@ function registerAutoReview(context: vscode.ExtensionContext) {
     if (!vscode.workspace.getConfiguration('alloy').get<boolean>('reviewOnSave', true)) return;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      vscode.commands.executeCommand('alloy.reviewCurrentFile', { autoTrigger: true });
+      // Cancel any in-flight review before starting a new one
+      if (activeReview) {
+        activeReview.cancel();
+        activeReview.dispose();
+      }
+      activeReview = new vscode.CancellationTokenSource();
+      vscode.commands.executeCommand('alloy.reviewCurrentFile', { autoTrigger: true, token: activeReview.token });
     }, config.debounceMs);
   }));
+
+  context.subscriptions.push({
+    dispose: () => {
+      if (activeReview) {
+        activeReview.cancel();
+        activeReview.dispose();
+      }
+    },
+  });
 }
 
 async function reviewActiveEditor(
@@ -379,13 +418,14 @@ async function reviewActiveEditor(
   statusBarItem: vscode.StatusBarItem,
   headProvider: ReturnType<typeof createHeadProvider>,
   isAutoTrigger: boolean,
+  token?: vscode.CancellationToken,
 ) {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
     if (!isAutoTrigger) vscode.window.showWarningMessage('No active editor to review.');
     return;
   }
-  await reviewDocument(context, editor.document, statusBarItem, headProvider, isAutoTrigger, true);
+  await reviewDocument(context, editor.document, statusBarItem, headProvider, isAutoTrigger, true, token);
 }
 
 async function reviewAllChangedFiles(context: vscode.ExtensionContext, statusBarItem: vscode.StatusBarItem) {
@@ -395,10 +435,13 @@ async function reviewAllChangedFiles(context: vscode.ExtensionContext, statusBar
     return;
   }
   const config = getAlloyConfig();
-  const files = (await getChangedFiles({ repoPath: workspaceFolder.uri.fsPath }))
-    .filter((filePath) => isSupportedSourceFile(filePath))
-    .filter((filePath) => !shouldSkipPath(filePath, workspaceFolder.uri.fsPath, config.skipPaths))
-    .slice(0, config.maxFilesPerReview);
+  const allFiles = await getChangedFiles({ repoPath: workspaceFolder.uri.fsPath });
+  const skipResults = await Promise.all(
+    allFiles.map(async (filePath) =>
+      isSupportedSourceFile(filePath) && !(await shouldSkipPath(filePath, workspaceFolder.uri.fsPath, config.skipPaths))
+    )
+  );
+  const files = allFiles.filter((_, i) => skipResults[i]).slice(0, config.maxFilesPerReview);
 
   if (files.length === 0) {
     vscode.window.showInformationMessage('Alloy: No supported changed files to review.');
@@ -459,7 +502,7 @@ async function reviewDocument(
     if (!isAutoTrigger) vscode.window.showInformationMessage('Alloy: MVP deep review supports TypeScript and JavaScript files.');
     return;
   }
-  if (shouldSkipPath(filePath, repoPath, config.skipPaths)) {
+  if (await shouldSkipPath(filePath, repoPath, config.skipPaths)) {
     if (!isAutoTrigger) vscode.window.showInformationMessage('Alloy: File skipped by .alloyignore or alloy.skipPaths.');
     return;
   }
@@ -517,10 +560,11 @@ async function reviewDocument(
           uri: document.uri,
           diagnosticCollection,
           commentController,
+          findingsTree,
         });
 
         const diagnostics = diagnosticCollection.get(document.uri) ?? [];
-        const storedFindings = getFindings(document.uri);
+        const storedFindings = findingsTree.getFindings(document.uri);
         const fallbackFindings = diagnostics.map((diagnostic): ReviewFinding => ({
           line: diagnostic.range.start.line + 1,
           severity: diagnostic.severity === vscode.DiagnosticSeverity.Error ? 'error' : diagnostic.severity === vscode.DiagnosticSeverity.Information ? 'info' : 'warning',
@@ -576,10 +620,11 @@ async function reviewDiffAndShowResults(
       uri: document.uri,
       diagnosticCollection,
       commentController,
+      findingsTree,
     });
 
     const diagnostics = diagnosticCollection.get(document.uri) ?? [];
-    const storedFindings = getFindings(document.uri);
+    const storedFindings = findingsTree.getFindings(document.uri);
     const fallbackFindings = diagnostics.map((diagnostic): ReviewFinding => ({
       line: diagnostic.range.start.line + 1,
       severity: diagnostic.severity === vscode.DiagnosticSeverity.Error ? 'error' : diagnostic.severity === vscode.DiagnosticSeverity.Information ? 'info' : 'warning',
@@ -620,7 +665,7 @@ async function openHeadDiff(
 }
 
 function updateStatusBar(statusBarItem: vscode.StatusBarItem): void {
-  const allFindings = getAllFindings();
+  const allFindings = findingsTree.getAllFindings().map(f => f.finding);
   const errors = allFindings.filter(f => f.severity === 'error').length;
   const warnings = allFindings.filter(f => f.severity === 'warning').length;
   const infos = allFindings.filter(f => f.severity === 'info').length;
@@ -645,7 +690,7 @@ function updateStatusBar(statusBarItem: vscode.StatusBarItem): void {
 function clearDocumentFindings(uri: vscode.Uri): void {
   diagnosticCollection.set(uri, []);
   commentController.clearComments(uri);
-  clearFindings(uri);
+  findingsTree.clearFindings(uri);
   findingsTree.clear(uri);
 }
 

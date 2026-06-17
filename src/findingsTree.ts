@@ -46,6 +46,8 @@ const CATEGORY_ORDER: FindingCategory[] = ['security', 'logic', 'quality', 'perf
 export class AlloyFindingsTree implements vscode.TreeDataProvider<TreeNode> {
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private readonly findingsChangedEmitter = new vscode.EventEmitter<void>();
+  readonly onDidChangeFindings = this.findingsChangedEmitter.event;
   private readonly findingsByUri = new Map<string, { uri: vscode.Uri; findings: ReviewFinding[] }>();
   private groupBy: GroupByMode = 'file';
 
@@ -65,6 +67,27 @@ export class AlloyFindingsTree implements vscode.TreeDataProvider<TreeNode> {
       this.findingsByUri.set(uri.toString(), { uri, findings });
     }
     this.emitter.fire();
+    this.findingsChangedEmitter.fire();
+  }
+
+  storeFindings(uri: vscode.Uri, findings: ReviewFinding[]): void {
+    this.setFindings(uri, findings);
+  }
+
+  getFindings(uri: vscode.Uri): ReviewFinding[] {
+    return this.findingsByUri.get(uri.toString())?.findings ?? [];
+  }
+
+  getAllFindingsMap(): Map<string, ReviewFinding[]> {
+    const result = new Map<string, ReviewFinding[]>();
+    for (const [key, entry] of this.findingsByUri) {
+      result.set(key, [...entry.findings]);
+    }
+    return result;
+  }
+
+  clearFindings(uri: vscode.Uri): void {
+    this.clear(uri);
   }
 
   clear(uri?: vscode.Uri): void {
@@ -74,6 +97,7 @@ export class AlloyFindingsTree implements vscode.TreeDataProvider<TreeNode> {
       this.findingsByUri.clear();
     }
     this.emitter.fire();
+    this.findingsChangedEmitter.fire();
   }
 
   dismissFinding(uri: vscode.Uri, findingId: string): void {
@@ -151,7 +175,7 @@ export class AlloyFindingsTree implements vscode.TreeDataProvider<TreeNode> {
 
   private buildRichTooltip(f: ReviewFinding): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
+    md.isTrusted = false;
     md.appendMarkdown(`**[${f.severity.toUpperCase()}] ${f.category ?? 'general'}**\n\n`);
     md.appendMarkdown(`Line ${f.line}\n\n`);
     md.appendMarkdown(`---\n\n`);
