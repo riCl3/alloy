@@ -25,7 +25,7 @@ export class AlloyCommentController {
         ? `${f.message}\n\n**Suggestion:** ${f.suggestion}`
         : f.message;
       const body = new vscode.MarkdownString(bodyText);
-      body.isTrusted = true;
+      body.isTrusted = false;
 
       const comment: vscode.Comment = { body, author: { name: 'Alloy' }, mode: vscode.CommentMode.Preview };
       const thread = this.controller.createCommentThread(uri, range, [comment]);

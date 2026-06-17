@@ -1,4 +1,4 @@
-import * as fs from 'fs';
+import { promises as fsp } from 'fs';
 import * as path from 'path';
 
 const DEFAULT_SKIP_PATTERNS = [
@@ -61,15 +61,15 @@ function getCompiledGlob(glob: string): RegExp {
   return regex;
 }
 
-export function loadAlloyIgnore(workspacePath: string): string[] {
+export async function loadAlloyIgnore(workspacePath: string): Promise<string[]> {
   const ignorePath = path.join(workspacePath, '.alloyignore');
   const cached = ignoreCache.get(workspacePath);
   try {
-    const stat = fs.statSync(ignorePath);
+    const stat = await fsp.stat(ignorePath);
     if (cached && cached.mtime === stat.mtimeMs) {
       return cached.patterns;
     }
-    const raw = fs.readFileSync(ignorePath, 'utf-8');
+    const raw = await fsp.readFile(ignorePath, 'utf-8');
     const patterns = raw
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -88,10 +88,11 @@ export function clearIgnoreCache(): void {
   compiledGlobCache.clear();
 }
 
-export function shouldSkipPath(filePath: string, workspacePath: string, configuredPatterns: string[] = []): boolean {
+export async function shouldSkipPath(filePath: string, workspacePath: string, configuredPatterns: string[] = []): Promise<boolean> {
   const relative = normalizePath(path.relative(workspacePath, filePath));
   const configured = Array.isArray(configuredPatterns) ? configuredPatterns : [];
-  const patterns = [...DEFAULT_SKIP_PATTERNS, ...configured, ...loadAlloyIgnore(workspacePath)];
+  const alloyIgnore = await loadAlloyIgnore(workspacePath);
+  const patterns = [...DEFAULT_SKIP_PATTERNS, ...configured, ...alloyIgnore];
   return patterns.some((pattern) => getCompiledGlob(pattern).test(relative));
 }
 

@@ -1,13 +1,7 @@
 import * as vscode from 'vscode';
 import { AlloyCodeActionProvider, canApplyFinding } from '../codeActionProvider';
 import { ReviewFinding } from '../types';
-import { getFindings } from '../findingsStore';
-
-jest.mock('../findingsStore', () => ({
-  getFindings: jest.fn(),
-}));
-
-const mockGetFindings = getFindings as jest.Mock;
+import { AlloyFindingsTree } from '../findingsTree';
 
 function makeDocument(lines: string[]): vscode.TextDocument {
   return {
@@ -29,8 +23,12 @@ function makeDiagnostic(line: number): vscode.Diagnostic {
 }
 
 describe('AlloyCodeActionProvider', () => {
+  let findingsTree: AlloyFindingsTree;
+  let provider: AlloyCodeActionProvider;
+
   beforeEach(() => {
-    mockGetFindings.mockReset();
+    findingsTree = new AlloyFindingsTree();
+    provider = new AlloyCodeActionProvider(findingsTree);
   });
 
   it('offers apply fix only for high-confidence valid replacements', () => {
@@ -43,9 +41,8 @@ describe('AlloyCodeActionProvider', () => {
       range: { startLine: 1, startCharacter: 0, endLine: 1, endCharacter: 5 },
       replacement: 'const safe = value;',
     };
-    mockGetFindings.mockReturnValue([finding]);
+    findingsTree.setFindings(vscode.Uri.file('/repo/src/file.ts'), [finding]);
 
-    const provider = new AlloyCodeActionProvider();
     const actions = provider.provideCodeActions(
       makeDocument(['value']),
       new vscode.Range(0, 0, 0, 1),

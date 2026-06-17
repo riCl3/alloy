@@ -4,7 +4,7 @@ import { getFunctionContext, formatFunctionContext } from './astContext';
 import { ReviewState } from './types';
 import { runReviewGraph } from './reviewGraph';
 import { RepoStyleIndexer } from './repoStyleIndexer';
-import { storeFindings } from './findingsStore';
+import { AlloyFindingsTree } from './findingsTree';
 import { AlloyCommentController } from './commentController';
 import { AlloyRuntimeConfig } from './types';
 import { buildReviewCacheKey, getCachedReview, setCachedReview } from './reviewCache';
@@ -31,10 +31,11 @@ export interface ReviewDiffOptions {
   uri: vscode.Uri;
   diagnosticCollection: vscode.DiagnosticCollection;
   commentController?: AlloyCommentController;
+  findingsTree: AlloyFindingsTree;
 }
 
 export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
-  const { diff, enumeratedDiff, sourceCode, filePath, modifiedLines, uri, diagnosticCollection, commentController, config } = options;
+  const { diff, enumeratedDiff, sourceCode, filePath, modifiedLines, uri, diagnosticCollection, commentController, findingsTree, config } = options;
 
   if (!diff.trim()) {
     diagnosticCollection.set(uri, []);
@@ -48,7 +49,7 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
   const cached = config ? getCachedReview(filePath, cacheKey) : undefined;
   if (cached) {
     const diagnostics = buildDiagnostics(cached);
-    storeFindings(uri, cached);
+    findingsTree.storeFindings(uri, cached);
     diagnosticCollection.set(uri, diagnostics);
     commentController?.setComments(uri, cached);
     console.log(`[Alloy] Review cache hit: ${cached.length} finding(s)`);
@@ -97,7 +98,7 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
 
   // Load and apply custom rules
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
-  const customRules = workspaceFolder ? loadCustomRules(workspaceFolder.uri.fsPath) : [];
+  const customRules = workspaceFolder ? await loadCustomRules(workspaceFolder.uri.fsPath) : [];
   const customRulesPrompt = buildCustomRulesPrompt(customRules);
   if (customRulesPrompt) {
     initialState.functionContext += customRulesPrompt;
@@ -109,7 +110,7 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
   const filteredFindings = filterFindings(allFindings, config);
   if (config) setCachedReview(filePath, cacheKey, filteredFindings);
   const diagnostics = buildDiagnostics(filteredFindings);
-  storeFindings(uri, filteredFindings);
+  findingsTree.storeFindings(uri, filteredFindings);
   diagnosticCollection.set(uri, diagnostics);
   commentController?.setComments(uri, filteredFindings);
   console.log(`[Alloy] Review complete: ${filteredFindings.length} findings, ${diagnostics.length} diagnostics`);

@@ -270,3 +270,12 @@ export class WorkspaceEdit {
   replace = jest.fn();
   delete = jest.fn();
 }
+
+export class CancellationTokenSource {
+  token = {
+    isCancellationRequested: false,
+    onCancellationRequested: jest.fn(),
+  };
+  cancel = jest.fn();
+  dispose = jest.fn();
+}

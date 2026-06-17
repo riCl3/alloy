@@ -3,10 +3,10 @@ import { redactSensitiveText } from '../redaction';
 import { buildReviewCacheKey, clearReviewCache, getCachedReview, setCachedReview } from '../reviewCache';
 
 describe('production controls', () => {
-  it('skips generated and configured paths', () => {
-    expect(shouldSkipPath('/repo/node_modules/pkg/index.ts', '/repo')).toBe(true);
-    expect(shouldSkipPath('/repo/src/generated/client.ts', '/repo', ['src/generated/**'])).toBe(true);
-    expect(shouldSkipPath('/repo/src/app.ts', '/repo', ['src/generated/**'])).toBe(false);
+  it('skips generated and configured paths', async () => {
+    expect(await shouldSkipPath('/repo/node_modules/pkg/index.ts', '/repo')).toBe(true);
+    expect(await shouldSkipPath('/repo/src/generated/client.ts', '/repo', ['src/generated/**'])).toBe(true);
+    expect(await shouldSkipPath('/repo/src/app.ts', '/repo', ['src/generated/**'])).toBe(false);
   });
 
   it('redacts common provider keys and env-style secrets', () => {

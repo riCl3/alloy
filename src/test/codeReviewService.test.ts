@@ -1,5 +1,6 @@
 import { reviewDiff, ReviewDiffOptions } from '../codeReviewService';
 import { runReviewGraph } from '../reviewGraph';
+import { AlloyFindingsTree } from '../findingsTree';
 
 jest.mock('../reviewGraph', () => {
   const actual = jest.requireActual('../reviewGraph');
@@ -25,6 +26,7 @@ function makeOptions(overrides?: Partial<ReviewDiffOptions>): ReviewDiffOptions 
     modifiedLines: [2],
     uri: { fsPath: '/repo/src/file.ts' } as any,
     diagnosticCollection: { set: jest.fn() } as any,
+    findingsTree: new AlloyFindingsTree(),
     ...overrides,
   };
 }

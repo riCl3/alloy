@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
-import { getFindings } from './findingsStore';
+import { AlloyFindingsTree } from './findingsTree';
 import { ReviewFinding } from './types';
 
 export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
   static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
+
+  constructor(private readonly findingsTree: AlloyFindingsTree) {}
 
   provideCodeActions(
     document: vscode.TextDocument,
@@ -11,7 +13,7 @@ export class AlloyCodeActionProvider implements vscode.CodeActionProvider {
     context: vscode.CodeActionContext,
   ): vscode.CodeAction[] {
     const actions: vscode.CodeAction[] = [];
-    const storedFindings = getFindings(document.uri);
+    const storedFindings = this.findingsTree.getFindings(document.uri);
 
     for (const diagnostic of context.diagnostics) {
       if (diagnostic.source !== 'Alloy') continue;

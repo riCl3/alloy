@@ -82,7 +82,7 @@ describe('AlloyCommentController', () => {
 
     const comment = stub.createCommentThread.mock.calls[0][2][0];
     expect(comment.body.value).toBe('Security flaw\n\n**Suggestion:** Fix it');
-    expect(comment.body.isTrusted).toBe(true);
+    expect(comment.body.isTrusted).toBe(false);
     expect(comment.author.name).toBe('Alloy');
   });
 
