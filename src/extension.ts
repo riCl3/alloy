@@ -15,6 +15,9 @@ import { SetupPanel } from './panels/SetupPanel';
 import { exportFindingsJSON, exportFindingsMarkdown } from './export';
 import { generatePRDescription } from './prDescriptionGenerator';
 import { RateLimiter } from './rateLimiter';
+import { setOutputChannel } from './logger';
+import { initializeDecorations, applyDecorations, clearDecorations, disposeDecorations } from './decorationManager';
+import { getDismissStore } from './dismissStore';
 
 const HEAD_SCHEME = 'alloy-head';
 
@@ -25,12 +28,21 @@ let findingsTree: AlloyFindingsTree;
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Alloy');
+  setOutputChannel(outputChannel);
   diagnosticCollection = vscode.languages.createDiagnosticCollection('alloy');
   commentController = new AlloyCommentController();
   findingsTree = new AlloyFindingsTree();
+  initializeDecorations();
+
+  // Initialize dismiss store and decorations
+  const workspaceFoldersInit = vscode.workspace.workspaceFolders;
+  if (workspaceFoldersInit && workspaceFoldersInit.length > 0) {
+    getDismissStore().initialize(workspaceFoldersInit[0].uri.fsPath);
+  }
 
   context.subscriptions.push(outputChannel, diagnosticCollection, { dispose: () => commentController.dispose() });
   context.subscriptions.push(vscode.window.createTreeView('alloyFindings', { treeDataProvider: findingsTree }));
+  context.subscriptions.push({ dispose: disposeDecorations });
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.tooltip = 'Alloy review status';
@@ -232,16 +244,20 @@ function registerCommands(
     diagnosticCollection.clear();
     findingsTree.clear();
     clearReviewCache();
+    // Clear gutter decorations
     const editor = vscode.window.activeTextEditor;
     if (editor) {
       commentController.clearComments(editor.document.uri);
       findingsTree.clearFindings(editor.document.uri);
+      clearDecorations(editor);
     }
     vscode.window.showInformationMessage('Alloy: Findings cleared.');
   });
 
   const dismissFinding = vscode.commands.registerCommand('alloy.dismissFinding', async (uri?: vscode.Uri, findingId?: string) => {
     if (!uri || !findingId) return;
+    // Persist the dismissal
+    await getDismissStore().dismiss(findingId);
     findingsTree.dismissFinding(uri, findingId);
     const remaining = findingsTree.getAllFindings().filter(f => f.uri.toString() === uri.toString());
     diagnosticCollection.set(uri, remaining.map(f => {
@@ -252,6 +268,8 @@ function registerCommands(
 
   const dismissAllInFile = vscode.commands.registerCommand('alloy.dismissAllInFile', async (uri?: vscode.Uri) => {
     if (!uri) return;
+    const fileFindings = findingsTree.getFindings(uri);
+    await getDismissStore().dismissAll(fileFindings);
     findingsTree.dismissAllInFile(uri);
     diagnosticCollection.delete(uri);
     commentController.clearComments(uri);
@@ -379,7 +397,19 @@ function registerCommands(
     await vscode.window.showTextDocument(doc);
   });
 
-  context.subscriptions.push(openMenu, setup, showIssue, copySuggestion, reviewCurrent, reviewAll, clear, reviewStagedCurrent, reviewStagedAll, dismissFinding, dismissAllInFile, copyFinding, groupByFile, groupBySeverity, groupByCategory, filterFindings, exportJSON, exportMarkdown, generatePR, openRulesFile);
+  const restoreFindings = vscode.commands.registerCommand('alloy.restoreFindings', async () => {
+    const dismissStore = getDismissStore();
+    await dismissStore.clear();
+    vscode.window.showInformationMessage('Alloy: All dismissed findings restored. Re-run a review to see them.');
+  });
+
+  context.subscriptions.push(restoreFindings);
+
+  const inspectPrompt = vscode.commands.registerCommand('alloy.inspectPrompt', async () => {
+    await showPromptInspector();
+  });
+
+  context.subscriptions.push(openMenu, setup, showIssue, copySuggestion, reviewCurrent, reviewAll, clear, reviewStagedCurrent, reviewStagedAll, dismissFinding, dismissAllInFile, copyFinding, groupByFile, groupBySeverity, groupByCategory, filterFindings, exportJSON, exportMarkdown, generatePR, openRulesFile, inspectPrompt);
 }
 
 function registerAutoReview(context: vscode.ExtensionContext) {
@@ -572,11 +602,21 @@ async function reviewDocument(
           suggestion: diagnostic.message,
         }));
         const findings = storedFindings.length > 0 ? storedFindings : fallbackFindings;
-        findingsTree.setFindings(document.uri, findings);
+        // Filter out persistently dismissed findings
+        const dismissStore = getDismissStore();
+        const filteredFindings = dismissStore.filterDismissed(findings) as ReviewFinding[];
+        findingsTree.setFindings(document.uri, filteredFindings);
         outputChannel.appendLine(`[Alloy] Review complete: ${diagnostics.length} finding(s)`);
+
+        // Apply gutter decorations
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document.uri.toString() === document.uri.toString()) {
+          applyDecorations(editor, filteredFindings);
+        }
+
         if (!isAutoTrigger) {
           vscode.window.showInformationMessage(diagnostics.length > 0
-            ? `Alloy: ${diagnostics.length} issue(s) found.`
+            ? `Alloy: ${diagnostics.length} issue(s) found (${findings.length - filteredFindings.length} dismissed).`
             : 'Alloy: No issues found.');
         }
       } catch (err) {
@@ -632,10 +672,20 @@ async function reviewDiffAndShowResults(
       suggestion: diagnostic.message,
     }));
     const findings = storedFindings.length > 0 ? storedFindings : fallbackFindings;
-    findingsTree.setFindings(document.uri, findings);
+    // Filter out persistently dismissed findings
+    const dismissStore = getDismissStore();
+    const filteredFindings = dismissStore.filterDismissed(findings) as ReviewFinding[];
+    findingsTree.setFindings(document.uri, filteredFindings);
     outputChannel.appendLine(`[Alloy] Review complete: ${diagnostics.length} finding(s)`);
+
+    // Apply gutter decorations
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor && activeEditor.document.uri.toString() === document.uri.toString()) {
+      applyDecorations(activeEditor, filteredFindings);
+    }
+
     vscode.window.showInformationMessage(diagnostics.length > 0
-      ? `Alloy: ${diagnostics.length} issue(s) found.`
+      ? `Alloy: ${diagnostics.length} issue(s) found (${findings.length - filteredFindings.length} dismissed).`
       : 'Alloy: No issues found.');
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -687,10 +737,105 @@ function updateStatusBar(statusBarItem: vscode.StatusBarItem): void {
   statusBarItem.show();
 }
 
+async function showPromptInspector(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showWarningMessage('Alloy: Open a file first to inspect the prompt.');
+    return;
+  }
+
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+  if (!workspaceFolder) {
+    vscode.window.showWarningMessage('Alloy: File is not in a workspace.');
+    return;
+  }
+
+  try {
+    const filePath = editor.document.uri.fsPath;
+    const repoPath = workspaceFolder.uri.fsPath;
+    const { getDiffForFile } = await import('./gitUtils');
+    const { parseUnifiedDiff, buildEnumeratedDiff } = await import('./diffParser');
+    const { getFunctionContext, formatFunctionContext } = await import('./astContext');
+    const { redactSensitiveText } = await import('./redaction');
+    const config = getAlloyConfig();
+
+    const rawDiff = await getDiffForFile(filePath, { repoPath });
+    if (!rawDiff.trim()) {
+      vscode.window.showInformationMessage('Alloy: No diff found for the current file.');
+      return;
+    }
+
+    const parsedDiff = parseUnifiedDiff(rawDiff, filePath);
+    const enumeratedDiff = buildEnumeratedDiff(parsedDiff);
+    const modifiedLines = parsedDiff.addedLines.map((line) => line.lineNumber);
+    const sourceCode = editor.document.getText();
+
+    const functionContexts = await getFunctionContext(sourceCode, modifiedLines, filePath);
+    const functionContextStr = formatFunctionContext(functionContexts);
+
+    const redactedDiff = redactSensitiveText(rawDiff);
+    const redactedEnumerated = redactSensitiveText(enumeratedDiff);
+    const redactedContext = redactSensitiveText(functionContextStr);
+
+    const line = '─'.repeat(60);
+    const content = [
+      `# Alloy Prompt Inspector`,
+      `**File:** ${filePath}`,
+      `**Provider:** ${config.provider}`,
+      `**Model:** ${config.model}`,
+      `**Mode:** ${config.reviewMode}`,
+      `**Diff lines:** ${rawDiff.split(/\\r?\\n/).length}`,
+      '',
+      `> *This is a preview of what would be sent to the LLM for review.*`,
+      `> *Sensitive values are redacted (shown as [REDACTED_SECRET] or [REDACTED]).*`,
+      '',
+      line,
+      `# Redacted Diff (sent to LLM)`,
+      '',
+      '```diff',
+      redactedDiff,
+      '```',
+      '',
+      line,
+      `# Function Context (sent to LLM)`,
+      '',
+      '```',
+      redactedContext || '(No function context extracted)',
+      '```',
+      '',
+      line,
+      `# Enumerated Diff (sent to LLM)`,
+      '',
+      '```',
+      redactedEnumerated || '(No enumerated diff)',
+      '```',
+      '',
+      line,
+      `# Original Diff Stats (before redaction)`,
+      '',
+      `- Added lines: ${parsedDiff.addedLines.length}`,
+      `- Removed lines: ${parsedDiff.removedLines.length}`,
+      `- Hunks: ${parsedDiff.hunks.length}`,
+      '',
+    ].join('\n');
+
+    const doc = await vscode.workspace.openTextDocument({ content, language: 'markdown' });
+    await vscode.window.showTextDocument(doc);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Alloy: Prompt inspector failed: ${message}`);
+  }
+}
+
 function clearDocumentFindings(uri: vscode.Uri): void {
   diagnosticCollection.set(uri, []);
   commentController.clearComments(uri);
   findingsTree.clearFindings(uri);
+  // Clear decorations
+  const editor = vscode.window.activeTextEditor;
+  if (editor && editor.document.uri.toString() === uri.toString()) {
+    clearDecorations(editor);
+  }
   findingsTree.clear(uri);
 }
 

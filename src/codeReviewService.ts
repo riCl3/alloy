@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logger } from './logger';
 import { buildDiagnostics } from './diagnosticBuilder';
 import { getFunctionContext, formatFunctionContext } from './astContext';
 import { ReviewState } from './types';
@@ -52,23 +53,23 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
     findingsTree.storeFindings(uri, cached);
     diagnosticCollection.set(uri, diagnostics);
     commentController?.setComments(uri, cached);
-    console.log(`[Alloy] Review cache hit: ${cached.length} finding(s)`);
+    logger.info(`Review cache hit: ${cached.length} finding(s)`);
     return;
   }
 
-  console.log(`[Alloy] Extracting function context...`);
+  logger.info(`Extracting function context...`);
   const functionContexts = await getFunctionContext(sourceCode, modifiedLines, filePath);
   const functionContextStr = formatFunctionContext(functionContexts);
-  console.log(`[Alloy] Function context: ${functionContexts.length} functions found`);
+  logger.info(`Function context: ${functionContexts.length} functions found`);
 
   let similarFunctions = '';
   if (indexer && indexer.vectorStore.size > 0) {
     try {
-      console.log(`[Alloy] Querying similar functions...`);
+      logger.info(`Querying similar functions...`);
       similarFunctions = await indexer.querySimilar(sourceCode, modifiedLines, filePath, 3);
-      console.log(`[Alloy] Similar functions found: ${similarFunctions.length} chars`);
+      logger.info(`Similar functions found: ${similarFunctions.length} chars`);
     } catch (err) {
-      console.warn(`[Alloy] Similar function query failed: ${(err as Error).message}`);
+      logger.warn(`Similar function query failed: ${(err as Error).message}`);
     }
   }
 
@@ -113,7 +114,7 @@ export async function reviewDiff(options: ReviewDiffOptions): Promise<void> {
   findingsTree.storeFindings(uri, filteredFindings);
   diagnosticCollection.set(uri, diagnostics);
   commentController?.setComments(uri, filteredFindings);
-  console.log(`[Alloy] Review complete: ${filteredFindings.length} findings, ${diagnostics.length} diagnostics`);
+  logger.info(`Review complete: ${filteredFindings.length} findings, ${diagnostics.length} diagnostics`);
 }
 
 function filterFindings(findings: ReviewState['finalFindings'], config?: AlloyRuntimeConfig) {

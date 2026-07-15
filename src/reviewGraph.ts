@@ -1,5 +1,6 @@
 import { StateGraph, Annotation, START, END } from '@langchain/langgraph';
 import { callLLM } from './llmRouter';
+import { logger } from './logger';
 import { ReviewFinding, ReviewState } from './types';
 
 const REVIEW_SCHEMA: Record<string, unknown> = {
@@ -391,7 +392,7 @@ function createPersonaReviewer(persona: string) {
       const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS[persona], responseSchema: REVIEW_SCHEMA });
       return { [PERSONA_OUTPUT_FIELD[persona]]: parseFindings(response.text) };
     } catch (err) {
-      console.error(`[Alloy] ${persona} reviewer failed: ${(err as Error).message}`);
+      logger.error(`${persona} reviewer failed: ${(err as Error).message}`);
       return { [PERSONA_OUTPUT_FIELD[persona]]: [] };
     }
   };
@@ -429,7 +430,7 @@ async function comprehensiveReviewer(state: GraphState): Promise<Partial<GraphSt
     const findings = parseFindings(response.text);
     return { finalFindings: findings };
   } catch (err) {
-    console.error(`[Alloy] comprehensive reviewer failed: ${(err as Error).message}`);
+    logger.error(`comprehensive reviewer failed: ${(err as Error).message}`);
     return { finalFindings: [] };
   }
 }
@@ -479,7 +480,7 @@ async function aggregator(state: GraphState): Promise<Partial<GraphState>> {
   const deduplicated = deduplicateFindings(adjusted);
   const modifiedSet = new Set(state.modifiedLines);
   const filtered = deduplicated.filter((f) => modifiedSet.has(f.line));
-  console.log(`[Alloy] aggregator: ${deduplicated.length} deduplicated, ${deduplicated.length - filtered.length} filtered out (not in modifiedLines)`);
+  logger.info(`aggregator: ${deduplicated.length} deduplicated, ${deduplicated.length - filtered.length} filtered out (not in modifiedLines)`);
   return { finalFindings: filtered };
 }
 
