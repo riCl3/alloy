@@ -1,6 +1,7 @@
 import { LLMProviderId, LLMResponse } from './types';
 import { getProviderApiKey, getProviderBaseUrl } from './secretManager';
 import { getAlloyConfig } from './config';
+import { logger } from './logger';
 
 export interface RouterOptions {
   prompt: string;
@@ -245,7 +246,7 @@ export async function validateProvider(provider: LLMProviderId, options?: Partia
 export async function callLLM(options: RouterOptions): Promise<LLMResponse> {
   if (options.provider) {
     const result = await getLLMProvider(options.provider).review(options);
-    console.log(`[Alloy] LLM call succeeded via ${result.provider} (${result.model})`);
+    logger.info(`LLM call succeeded via ${result.provider} (${result.model})`);
     return result;
   }
 
@@ -256,17 +257,17 @@ export async function callLLM(options: RouterOptions): Promise<LLMResponse> {
       provider: config.provider,
       model: options.model ?? config.model,
     });
-    console.log(`[Alloy] LLM call succeeded via ${result.provider} (${result.model})`);
+    logger.info(`LLM call succeeded via ${result.provider} (${result.model})`);
     return result;
   } catch (primaryErr) {
-    console.warn(`[Alloy] ${config.provider} failed: ${(primaryErr as Error).message}`);
+    logger.warn(`${config.provider} failed: ${(primaryErr as Error).message}`);
     const geminiFallbackKey = options.geminiApiKey || getProviderApiKey('gemini');
     if (config.provider !== 'groq' || !isRetryableError(primaryErr) || !geminiFallbackKey) {
       throw primaryErr;
     }
     try {
       const result = await getLLMProvider('gemini').review({ ...options, provider: 'gemini', apiKey: geminiFallbackKey });
-      console.log(`[Alloy] LLM call succeeded via Gemini (${result.model})`);
+      logger.info(`LLM call succeeded via Gemini (${result.model})`);
       return result;
     } catch (fallbackErr) {
       throw new Error(

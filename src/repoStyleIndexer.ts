@@ -4,6 +4,7 @@ import { SUPPORTED_EXTENSIONS } from './ignore';
 import { promises as fsp } from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
+import { logger } from './logger';
 
 export interface IndexerOptions {
   geminiApiKey?: string;
@@ -143,11 +144,11 @@ export class RepoStyleIndexer {
       const data = JSON.parse(raw) as { snapshot: StoreSnapshot; checksum: string };
       const expectedChecksum = createHash('sha256').update(JSON.stringify(data.snapshot)).digest('hex');
       if (data.checksum !== expectedChecksum) {
-        console.warn('[Alloy Indexer] Cache integrity check failed, rebuilding index');
+        logger.warn('Indexer: Cache integrity check failed, rebuilding index');
         return false;
       }
       this.store.load(data.snapshot);
-      console.log(`[Alloy Indexer] Loaded ${this.store.size} indexed functions from cache`);
+      logger.info(`Indexer: Loaded ${this.store.size} indexed functions from cache`);
       return true;
     } catch {
       return false;
@@ -164,9 +165,9 @@ export class RepoStyleIndexer {
       const checksum = createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
       const data = { snapshot, checksum };
       await fsp.writeFile(filePath, JSON.stringify(data), 'utf-8');
-      console.log(`[Alloy Indexer] Saved ${this.store.size} indexed functions to cache`);
+      logger.info(`Indexer: Saved ${this.store.size} indexed functions to cache`);
     } catch (err) {
-      console.warn(`[Alloy Indexer] Failed to save cache: ${(err as Error).message}`);
+      logger.warn(`Indexer: Failed to save cache: ${(err as Error).message}`);
     }
   }
 
@@ -193,11 +194,11 @@ export class RepoStyleIndexer {
     }
 
     if (filesToIndex.length === 0) {
-      console.log(`[Alloy Indexer] All files are up to date (${this.store.size} functions cached)`);
+      logger.info(`Indexer: All files are up to date (${this.store.size} functions cached)`);
       return;
     }
 
-    console.log(`[Alloy Indexer] Indexing ${filesToIndex.length} new/changed files...`);
+    logger.info(`Indexer: Indexing ${filesToIndex.length} new/changed files...`);
     const allFunctions: IndexedFunction[] = [];
 
     for (const filePath of filesToIndex) {
@@ -227,7 +228,7 @@ export class RepoStyleIndexer {
       );
       const failed = results.filter((r) => r.status === 'rejected').length;
       if (failed > 0) {
-        console.warn(`[Alloy Indexer] ${failed} embeddings failed in batch ${Math.floor(i / batchSize) + 1}`);
+        logger.warn(`Indexer: ${failed} embeddings failed in batch ${Math.floor(i / batchSize) + 1}`);
       }
     }
 

@@ -15,6 +15,7 @@ import { SetupPanel } from './panels/SetupPanel';
 import { exportFindingsJSON, exportFindingsMarkdown } from './export';
 import { generatePRDescription } from './prDescriptionGenerator';
 import { RateLimiter } from './rateLimiter';
+import { setOutputChannel } from './logger';
 
 const HEAD_SCHEME = 'alloy-head';
 
@@ -25,6 +26,7 @@ let findingsTree: AlloyFindingsTree;
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Alloy');
+  setOutputChannel(outputChannel);
   diagnosticCollection = vscode.languages.createDiagnosticCollection('alloy');
   commentController = new AlloyCommentController();
   findingsTree = new AlloyFindingsTree();

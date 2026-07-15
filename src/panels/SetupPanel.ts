@@ -4,6 +4,7 @@ import { LLMProviderId } from '../types';
 import { getAlloyConfig, providerDefaultModel } from '../config';
 import { validateProvider } from '../llmRouter';
 import { getProviderStatus, saveProviderCredentials } from '../secretManager';
+import { logger } from '../logger';
 
 const VALID_PROVIDER_IDS: ReadonlySet<string> = new Set<LLMProviderId>(['groq', 'gemini', 'openaiCompatible', 'ollama']);
 
@@ -89,7 +90,7 @@ export class SetupPanel {
   private async handleMessage(message: { type: string; payload?: unknown }): Promise<void> {
     const now = Date.now();
     if (now - this.lastMessageTime < SetupPanel.RATE_LIMIT_MS) {
-      console.warn('[Alloy SetupPanel] Rate limited message');
+      logger.warn('SetupPanel: Rate limited message');
       return;
     }
     this.lastMessageTime = now;
@@ -97,7 +98,7 @@ export class SetupPanel {
     switch (message.type) {
       case 'save': {
         if (!hasValidProvider(message.payload)) {
-          console.warn('[Alloy SetupPanel] Invalid save payload');
+          logger.warn('SetupPanel: Invalid save payload');
           return;
         }
         const { provider } = message.payload;
@@ -129,7 +130,7 @@ export class SetupPanel {
       }
       case 'test': {
         if (!hasValidProvider(message.payload)) {
-          console.warn('[Alloy SetupPanel] Invalid test payload');
+          logger.warn('SetupPanel: Invalid test payload');
           return;
         }
         try {

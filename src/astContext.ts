@@ -1,4 +1,5 @@
 import { Parser, Language, Node } from 'web-tree-sitter';
+import { logger } from './logger';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -15,16 +16,25 @@ interface LanguageLoader {
 }
 
 let initialized = false;
+let initLock: Promise<void> | null = null;
 const languageLoaders = new Map<string, LanguageLoader>();
-let cachedParser: Parser | null = null;
 
 async function ensureInit(): Promise<void> {
-  if (!initialized) {
-    const wasmPath = path.resolve(__dirname, '..', 'node_modules', 'web-tree-sitter', 'web-tree-sitter.wasm');
-    const wasmBinary = fs.readFileSync(wasmPath);
-    await Parser.init({ wasmBinary });
-    initialized = true;
-  }
+  if (initialized) return;
+  if (initLock) return initLock;
+  initLock = (async () => {
+    try {
+      const wasmPath = path.resolve(__dirname, '..', 'node_modules', 'web-tree-sitter', 'web-tree-sitter.wasm');
+      const wasmBinary = fs.readFileSync(wasmPath);
+      await Parser.init({ wasmBinary });
+      initialized = true;
+    } catch (err) {
+      // Reset initLock so subsequent calls retry initialization
+      initLock = null;
+      throw err;
+    }
+  })();
+  await initLock;
 }
 
 function getLanguageWasmPath(language: string): string {
@@ -161,29 +171,35 @@ export async function getFunctionContext(
 
   const parsePromise = (async () => {
     const lang = await getLanguage(language);
-    if (!cachedParser) {
-      cachedParser = new Parser();
+    // Create a new parser per-call to avoid race conditions from concurrent reviews
+    const parser = new Parser();
+    parser.setLanguage(lang);
+
+    let result: FunctionContext[];
+    try {
+      const tree = parser.parse(sourceCode);
+      if (!tree) {
+        return [];
+      }
+
+      const root = tree.rootNode;
+      const modifiedSet = new Set(modifiedLines);
+      const contexts: FunctionContext[] = [];
+
+      findFunctionsInTree(root, modifiedSet, sourceCode, contexts);
+
+      tree.delete();
+      result = contexts;
+    } finally {
+      parser.delete();
     }
-    cachedParser.setLanguage(lang);
 
-    const tree = cachedParser.parse(sourceCode);
-    if (!tree) {
-      return [];
-    }
-
-    const root = tree.rootNode;
-    const modifiedSet = new Set(modifiedLines);
-    const contexts: FunctionContext[] = [];
-
-    findFunctionsInTree(root, modifiedSet, sourceCode, contexts);
-
-    tree.delete();
-    return contexts;
+    return result;
   })();
 
   const timeoutPromise = new Promise<FunctionContext[]>((resolve) => {
     setTimeout(() => {
-      console.warn(`[Alloy] Tree-sitter parse timed out for ${filePath}`);
+      logger.warn(`Tree-sitter parse timed out for ${filePath}`);
       resolve([]);
     }, PARSE_TIMEOUT_MS);
   });
