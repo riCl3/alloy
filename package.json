@@ -205,6 +205,14 @@
       {
         "command": "alloy.reviewAllStagedFiles",
         "title": "Alloy: Review All Staged Files"
+      },
+      {
+        "command": "alloy.inspectPrompt",
+        "title": "Alloy: Inspect Prompt (Preview What Gets Sent)"
+      },
+      {
+        "command": "alloy.restoreFindings",
+        "title": "Alloy: Restore All Dismissed Findings"
       }
     ],
     "views": {

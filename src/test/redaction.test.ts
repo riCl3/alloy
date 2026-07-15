@@ -52,7 +52,7 @@ describe('redaction', () => {
   });
 
   it('redacts Slack bot tokens (xoxb-)', () => {
-    const text = 'xoxb-FAKE_123456_FAKE_123456_ABCDefghijklmnopqr';
+    const text = 'xoxb-FAKEFAKE-ABCD-12345678901234567890';
     const result = redactSensitiveText(text);
     expect(result).toContain('[REDACTED_SECRET]');
     expect(result).not.toContain('xoxb-');
