@@ -1,17 +1,17 @@
 import { getAlloyConfig, providerDefaultModel } from '../config';
+import { workspace } from 'vscode';
 
-const mockGet = jest.fn();
-const mockGetConfiguration = jest.fn().mockReturnValue({ get: mockGet });
-
-jest.mock('vscode', () => ({
-  workspace: {
-    getConfiguration: mockGetConfiguration,
-  },
-}));
+jest.mock('vscode');
 
 describe('config', () => {
+  let mockGet: jest.Mock;
+
   beforeEach(() => {
-    mockGet.mockReset();
+    mockGet = jest.fn();
+    (workspace.getConfiguration as unknown as jest.Mock).mockReturnValue({
+      get: mockGet,
+      update: jest.fn(),
+    });
   });
 
   it('returns default config values', () => {
