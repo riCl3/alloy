@@ -19,7 +19,7 @@ describe('config', () => {
 
     const config = getAlloyConfig();
     expect(config.provider).toBe('groq');
-    expect(config.model).toBe('llama-3.3-70b-versatile');
+    expect(config.model).toBe('openai/gpt-oss-20b');
     expect(config.reviewMode).toBe('fast');
     expect(config.maxDiffLines).toBe(600);
     expect(config.maxFilesPerReview).toBe(12);
@@ -109,7 +109,7 @@ describe('config', () => {
   });
 
   it('returns provider default models', () => {
-    expect(providerDefaultModel('groq')).toBe('llama-3.3-70b-versatile');
+    expect(providerDefaultModel('groq')).toBe('openai/gpt-oss-20b');
     expect(providerDefaultModel('gemini')).toBe('gemini-1.5-flash');
     expect(providerDefaultModel('openaiCompatible')).toBe('gpt-4o-mini');
     expect(providerDefaultModel('ollama')).toBe('llama3.1');

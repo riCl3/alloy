@@ -390,10 +390,22 @@ function createPersonaReviewer(persona: string) {
       const diffForPrompt = state.enumeratedDiff || state.diff;
       const prompt = buildPersonaPrompt(persona, diffForPrompt, state.functionContext, useSimilarFunctions ? state.similarFunctions : undefined);
       const response = await callLLM({ prompt, systemPrompt: SYSTEM_PROMPTS[persona], responseSchema: REVIEW_SCHEMA });
-      return { [PERSONA_OUTPUT_FIELD[persona]]: parseFindings(response.text) };
+      const findings = parseFindings(response.text);
+      if (findings.length === 0 && response.text.trim().length > 0) {
+        logger.warn(`${persona} reviewer returned 0 findings from ${response.text.length} chars of LLM output`);
+      }
+      return { [PERSONA_OUTPUT_FIELD[persona]]: findings };
     } catch (err) {
-      logger.error(`${persona} reviewer failed: ${(err as Error).message}`);
-      return { [PERSONA_OUTPUT_FIELD[persona]]: [] };
+      const msg = (err as Error).message;
+      logger.error(`${persona} reviewer failed: ${msg}`);
+      // Store error so it can be surfaced to the user
+      return { [PERSONA_OUTPUT_FIELD[persona]]: [{
+        line: 1,
+        severity: 'info' as const,
+        message: `${persona} review failed: ${msg}`,
+        suggestion: 'Check the Alloy output channel for details.',
+        category: 'quality' as const,
+      }] };
     }
   };
 }
@@ -428,10 +440,20 @@ async function comprehensiveReviewer(state: GraphState): Promise<Partial<GraphSt
     const systemPrompt = state.reviewMode === 'architecture' ? SYSTEM_PROMPTS.architecture : SYSTEM_PROMPTS.comprehensive;
     const response = await callLLM({ prompt: promptParts.join('\n'), systemPrompt, responseSchema: REVIEW_SCHEMA });
     const findings = parseFindings(response.text);
+    if (findings.length === 0 && response.text.trim().length > 0) {
+      logger.warn(`comprehensive reviewer returned 0 findings from ${response.text.length} chars of LLM output`);
+    }
     return { finalFindings: findings };
   } catch (err) {
-    logger.error(`comprehensive reviewer failed: ${(err as Error).message}`);
-    return { finalFindings: [] };
+    const msg = (err as Error).message;
+    logger.error(`comprehensive reviewer failed: ${msg}`);
+    return { finalFindings: [{
+      line: 1,
+      severity: 'info' as const,
+      message: `Review failed: ${msg}`,
+      suggestion: 'Check the Alloy output channel for details.',
+      category: 'quality' as const,
+    }] };
   }
 }
 

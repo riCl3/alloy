@@ -1,5 +1,16 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+
+// Suppress Node.js deprecation warnings from transitive dependencies
+// (punycode, url.parse) that we cannot control — these come from
+// @langchain/langgraph → p-queue/p-retry chain on Node.js ≥22.
+const origEmitWarning = process.emitWarning.bind(process);
+process.emitWarning = ((warning: string | Error, type?: string, code?: string) => {
+  if (type === 'DeprecationWarning' || (typeof warning === 'string' && warning.includes('deprecated'))) {
+    return;
+  }
+  return origEmitWarning(warning as any, type as any, code as any);
+}) as typeof process.emitWarning;
 import { getChangedFiles, getDiffForFile, getHeadContent, getStagedDiffForFile, getStagedFiles } from './gitUtils';
 import { parseUnifiedDiff, buildEnumeratedDiff } from './diffParser';
 import { reviewDiff } from './codeReviewService';
@@ -18,6 +29,8 @@ import { RateLimiter } from './rateLimiter';
 import { setOutputChannel } from './logger';
 import { initializeDecorations, applyDecorations, clearDecorations, disposeDecorations } from './decorationManager';
 import { getDismissStore } from './dismissStore';
+import { AlloyHoverProvider } from './hoverProvider';
+import { AlloyCodeLensProvider } from './codeLensProvider';
 
 const HEAD_SCHEME = 'alloy-head';
 
@@ -43,6 +56,23 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(outputChannel, diagnosticCollection, { dispose: () => commentController.dispose() });
   context.subscriptions.push(vscode.window.createTreeView('alloyFindings', { treeDataProvider: findingsTree }));
   context.subscriptions.push({ dispose: disposeDecorations });
+
+  // Register hover provider for Alloy findings
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      { scheme: 'file' },
+      new AlloyHoverProvider(findingsTree),
+    ),
+  );
+
+  // Register CodeLens provider for Alloy findings summary
+  const codeLensProvider = new AlloyCodeLensProvider(findingsTree);
+  context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      { scheme: 'file' },
+      codeLensProvider,
+    ),
+  );
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.tooltip = 'Alloy review status';
