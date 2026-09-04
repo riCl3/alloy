@@ -58,3 +58,5 @@ temp/
 # package-lock.json is tracked; ignore alternatives if present
 yarn.lock
 pnpm-lock.yaml
+blog-alloy-architecture.md
+book

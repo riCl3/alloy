@@ -5,7 +5,7 @@ const DEFAULT_CATEGORIES: FindingCategory[] = ['security', 'logic', 'quality', '
 const DEFAULT_SEVERITIES: Severity[] = ['error', 'warning', 'info'];
 
 const DEFAULT_MODELS: Record<LLMProviderId, string> = {
-  groq: 'llama-3.3-70b-versatile',
+  groq: 'openai/gpt-oss-20b',
   gemini: 'gemini-1.5-flash',
   openaiCompatible: 'gpt-4o-mini',
   ollama: 'llama3.1',

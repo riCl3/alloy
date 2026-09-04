@@ -133,6 +133,8 @@ export const languages = {
     name: 'alloy',
   }),
   registerCodeActionsProvider: jest.fn(),
+  registerHoverProvider: jest.fn(),
+  registerCodeLensProvider: jest.fn(),
 };
 
 export const workspace = {
@@ -168,6 +170,13 @@ export enum ViewColumn {
   One = 1,
 }
 
+export enum OverviewRulerLane {
+  Left = 1,
+  Center = 2,
+  Right = 3,
+  Full = 4,
+}
+
 export const window = {
   createOutputChannel: jest.fn().mockReturnValue({
     appendLine: jest.fn(),
@@ -194,6 +203,9 @@ export const window = {
   activeTextEditor: undefined,
   withProgress: jest.fn(),
   createTreeView: jest.fn().mockReturnValue({ dispose: jest.fn() }),
+  createTextEditorDecorationType: jest.fn().mockReturnValue({
+    dispose: jest.fn(),
+  }),
   createWebviewPanel: jest.fn().mockReturnValue({
     webview: { html: '' },
     dispose: jest.fn(),
@@ -278,4 +290,22 @@ export class CancellationTokenSource {
   };
   cancel = jest.fn();
   dispose = jest.fn();
+}
+
+export class Hover {
+  contents: any;
+  range: any;
+  constructor(contents: any, range?: any) {
+    this.contents = contents;
+    this.range = range;
+  }
+}
+
+export class CodeLens {
+  range: any;
+  command: any;
+  constructor(range: any, command?: any) {
+    this.range = range;
+    this.command = command;
+  }
 }

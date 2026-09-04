@@ -83,6 +83,7 @@ async function callOpenAICompatible(
   apiKey: string,
   model: string,
   options: RouterOptions,
+  timeoutMs?: number,
 ): Promise<LLMResponse> {
   if (!apiKey && provider !== 'ollama') throw new Error(`${provider} API key is missing`);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -92,8 +93,13 @@ async function callOpenAICompatible(
     model,
     messages: messages(options),
     temperature: options.temperature ?? 0.1,
-    max_tokens: options.maxTokens ?? 1024,
   };
+  // Ollama uses num_predict, not max_tokens
+  if (provider === 'ollama') {
+    body.options = { num_predict: options.maxTokens ?? 1024 };
+  } else {
+    body.max_tokens = options.maxTokens ?? 1024;
+  }
   if (options.structuredOutput !== false && options.responseSchema) {
     body.response_format = { type: 'json_object' };
   }
@@ -102,7 +108,7 @@ async function callOpenAICompatible(
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-  });
+  }, timeoutMs);
 
   const label = provider === 'groq' ? 'Groq' : provider === 'openaiCompatible' ? 'OpenAI-compatible' : provider === 'ollama' ? 'Ollama' : provider;
   if (response.status === 429) {
@@ -119,7 +125,7 @@ class GroqProvider implements LLMProvider {
   id: LLMProviderId = 'groq';
 
   review(options: RouterOptions): Promise<LLMResponse> {
-    const model = options.model ?? options.groqModel ?? 'llama-3.3-70b-versatile';
+    const model = options.model ?? options.groqModel ?? 'openai/gpt-oss-20b';
     return callOpenAICompatible(
       'groq',
       'https://api.groq.com/openai/v1/chat/completions',
@@ -167,7 +173,7 @@ class OllamaProvider implements LLMProvider {
   review(options: RouterOptions): Promise<LLMResponse> {
     const model = options.model ?? 'llama3.1';
     const baseUrl = configuredBaseUrl('ollama', options.baseUrl);
-    return callOpenAICompatible('ollama', `${baseUrl.replace(/\/$/, '')}/chat/completions`, '', model, options);
+    return callOpenAICompatible('ollama', `${baseUrl.replace(/\/$/, '')}/chat/completions`, '', model, options, 120_000);
   }
 
   async validateCredentials(options?: Partial<RouterOptions>): Promise<void> {

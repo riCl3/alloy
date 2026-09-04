@@ -268,8 +268,11 @@ describe('runReviewGraph', () => {
       modifiedLines: [1],
     }));
 
-    expect(result.finalFindings).toHaveLength(1);
-    expect(result.finalFindings[0].message).toBe('Bug');
+    // 2 failures produce info findings + 1 success produces Bug
+    // Aggregator deduplicates by line, keeping highest severity
+    expect(result.finalFindings.length).toBeGreaterThanOrEqual(1);
+    const messages = result.finalFindings.map(f => f.message);
+    expect(messages).toContain('Bug');
   });
 
   describe('single-agent mode', () => {
@@ -325,7 +328,10 @@ describe('runReviewGraph', () => {
         singleAgent: true,
       }));
 
-      expect(result.finalFindings).toEqual([]);
+      // Error is surfaced as an info finding so the user sees it
+      expect(result.finalFindings).toHaveLength(1);
+      expect(result.finalFindings[0].message).toContain('API error');
+      expect(result.finalFindings[0].severity).toBe('info');
       expect(mockCallLLM).toHaveBeenCalledTimes(1);
     });
   });
